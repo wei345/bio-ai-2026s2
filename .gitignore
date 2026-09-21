@@ -1,5 +1,6 @@
 *.mp4
 *.png
+analyses/
 
 # Intellij project files
 *.iml

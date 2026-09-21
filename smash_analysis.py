@@ -13,7 +13,11 @@ warnings.filterwarnings("ignore", category=UserWarning, module="google.protobuf.
 import cv2
 import mediapipe as mp
 import numpy as np
-from scipy.signal import savgol_filter
+import matplotlib
+if 'HEADLESS_MODE' in os.environ:
+    # For a web server, Matplotlib must be configured to run in the
+    # background without trying to open GUI windows
+    matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import math
 from dataclasses import dataclass
@@ -593,7 +597,8 @@ def plot_smash_validation(metrics: list[FrameMetrics], fps: float,
         plt.savefig(fig_name, dpi=300, bbox_inches='tight')
         print(f"Figure saved as {fig_name}")
 
-    plt.show()
+    if 'HEADLESS_MODE' not in os.environ:
+        plt.show()
 # endregion
 
 # region Visualization: Overlaying Video
@@ -671,7 +676,7 @@ def _get_risk_visuals(risk_level):
     else:  # HIGH
         return (0, 0, 255), "High"    # Red
 
-def _format_sequence(seq):
+def format_sequence(seq):
     """Shortens joint names to fit neatly in the table columns."""
     return ", ".join([s.replace("Upper Arm", "Arm").replace("Trunk", "Core").replace("Grip", "Hand") for s in seq])
 
@@ -796,7 +801,6 @@ def overlay_kinematic_assessment(input_video_path,
 
         # --- 2. DRAW HUD TABLES ---
 
-        # Check if the current frame is inside an active smash
         active_smash_idx = -1
         for i, s in enumerate(smashes):
             if s.start_frame_idx <= frame_idx <= s.end_frame_idx:
@@ -804,22 +808,43 @@ def overlay_kinematic_assessment(input_video_path,
                 break
 
         # Render Table 1: Detailed Smash Assessment (During Smash)
-        if active_smash_idx != -1:
+        if active_smash_idx != -1 and active_smash_idx < len(assessments):
             a = assessments[active_smash_idx]
 
-            # Table Dimensions
-            tx, ty = width - 580, height - 180
-            tw, th = 550, 150
+            # ==========================================
+            # TABLE 1 LAYOUT PARAMETERS
+            # ==========================================
+            t1_margin_right = 15       # Pixels from the right edge of the video
+            t1_y_from_top = height - 260 # Base Y position (top of the table)
+
+            t1_pad_x = 15              # Inner left and right padding
+            t1_pad_y_top = 30          # Distance from table top to title text baseline
+            t1_row_h = 30              # Vertical height of each data row
+            t1_bottom_pad = 15         # Padding below the last row
+
+            t1_col1_w = 80             # Width of "Feature" column
+            t1_col2_w = 200            # Width of "Result" column
+            t1_col3_w = 40             # Width of "Risk" column
+            # ==========================================
+
+            # --- Calculated Dimensions ---
+            tw = t1_pad_x + t1_col1_w + t1_col2_w + t1_col3_w + t1_pad_x
+            th = t1_pad_y_top + 10 + t1_row_h + (3 * t1_row_h) + t1_bottom_pad
+
+            tx = width - tw - t1_margin_right
+            ty = t1_y_from_top
+
             _draw_table_overlay(frame, tx, ty, tw, th)
 
             # Titles & Headers
-            cv2.putText(frame, f"Smash {active_smash_idx + 1}", (tx + 15, ty + 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
-            cv2.line(frame, (tx + 15, ty + 40), (tx + tw - 15, ty + 40), (255, 255, 255), 1)
+            cv2.putText(frame, f"Smash {active_smash_idx + 1}", (tx + t1_pad_x, ty + t1_pad_y_top), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+            cv2.line(frame, (tx + t1_pad_x, ty + t1_pad_y_top + 10), (tx + tw - t1_pad_x, ty + t1_pad_y_top + 10), (255, 255, 255), 1)
 
-            # Column Offsets
-            col1, col2, col3 = tx + 15, tx + 120, tx + 460
-            y_base = ty + 70
-            line_space = 30
+            # Calculated Column Offsets
+            col1 = tx + t1_pad_x
+            col2 = col1 + t1_col1_w
+            col3 = col2 + t1_col2_w
+            y_base = ty + t1_pad_y_top + 40 # Header baseline
 
             # Headers
             cv2.putText(frame, "Feature", (col1, y_base), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
@@ -828,37 +853,58 @@ def overlay_kinematic_assessment(input_video_path,
 
             # Row 1: P-D Sequence
             c_pd, txt_pd = _get_risk_visuals(a.p_d_sequence_risk)
-            cv2.putText(frame, "P-D Seq", (col1, y_base + line_space), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
-            cv2.putText(frame, _format_sequence(a.p_d_sequence), (col2, y_base + line_space), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
-            cv2.putText(frame, txt_pd, (col3, y_base + line_space), cv2.FONT_HERSHEY_SIMPLEX, 0.5, c_pd, 2, cv2.LINE_AA)
+            cv2.putText(frame, "P-D Seq", (col1, y_base + t1_row_h), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+            cv2.putText(frame, format_sequence(a.p_d_sequence), (col2, y_base + t1_row_h), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+            cv2.putText(frame, txt_pd, (col3, y_base + t1_row_h), cv2.FONT_HERSHEY_SIMPLEX, 0.5, c_pd, 2, cv2.LINE_AA)
 
             # Row 2: Velocity Amplification
             c_amp, txt_amp = _get_risk_visuals(a.velocity_amplification_risk)
-            cv2.putText(frame, "V-Amp", (col1, y_base + line_space * 2), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
-            cv2.putText(frame, _format_sequence(a.velocity_amplification), (col2, y_base + line_space * 2), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
-            cv2.putText(frame, txt_amp, (col3, y_base + line_space * 2), cv2.FONT_HERSHEY_SIMPLEX, 0.5, c_amp, 2, cv2.LINE_AA)
+            cv2.putText(frame, "V-Amp", (col1, y_base + t1_row_h * 2), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+            cv2.putText(frame, format_sequence(a.velocity_amplification), (col2, y_base + t1_row_h * 2), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+            cv2.putText(frame, txt_amp, (col3, y_base + t1_row_h * 2), cv2.FONT_HERSHEY_SIMPLEX, 0.5, c_amp, 2, cv2.LINE_AA)
 
             # Row 3: UA Deceleration
             c_dec, txt_dec = _get_risk_visuals(a.critical_deceleration_risk)
-            cv2.putText(frame, "UA Decel", (col1, y_base + line_space * 3), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
-            cv2.putText(frame, f"{abs(a.critical_deceleration):.0f}", (col2, y_base + line_space * 3), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
-            cv2.putText(frame, txt_dec, (col3, y_base + line_space * 3), cv2.FONT_HERSHEY_SIMPLEX, 0.5, c_dec, 2, cv2.LINE_AA)
+            cv2.putText(frame, "UA Decel", (col1, y_base + t1_row_h * 3), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+            cv2.putText(frame, f"{abs(a.critical_deceleration):.0f} deg/s²", (col2, y_base + t1_row_h * 3), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+            cv2.putText(frame, txt_dec, (col3, y_base + t1_row_h * 3), cv2.FONT_HERSHEY_SIMPLEX, 0.5, c_dec, 2, cv2.LINE_AA)
 
         # Render Table 2: Overall Summary (After the last smash completes)
         elif frame_idx > summary_start_frame:
 
-            tw, th = 350, 80 + (len(assessments) * 30)
-            tx, ty = width - tw - 30, height - th - 30
+            # ==========================================
+            # TABLE 2 LAYOUT PARAMETERS
+            # ==========================================
+            t2_margin_right = 30       # Pixels from the right edge
+            t2_margin_bottom = 90      # Pixels from the bottom edge
+
+            t2_pad_x = 15
+            t2_pad_y_top = 30
+            t2_row_h = 30
+
+            t2_col1_w = 45             # Width of "#" column
+            t2_col2_w = 120            # Width of "Time" column
+            t2_col3_w = 35             # Width of "Risk" column
+            # ==========================================
+
+            # --- Calculated Dimensions ---
+            tw = t2_pad_x + t2_col1_w + t2_col2_w + t2_col3_w + t2_pad_x
+            th = 80 + (len(assessments) * t2_row_h)
+
+            tx = width - tw - t2_margin_right
+            ty = height - th - t2_margin_bottom
+
             _draw_table_overlay(frame, tx, ty, tw, th)
 
             # Title
-            cv2.putText(frame, "Smash Assessment Summary", (tx + 15, ty + 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
-            cv2.line(frame, (tx + 15, ty + 40), (tx + tw - 15, ty + 40), (255, 255, 255), 1)
+            cv2.putText(frame, "Smash Assessment Summary", (tx + t2_pad_x, ty + t2_pad_y_top), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
+            cv2.line(frame, (tx + t2_pad_x, ty + t2_pad_y_top + 10), (tx + tw - t2_pad_x, ty + t2_pad_y_top + 10), (255, 255, 255), 1)
 
-            # Column Offsets
-            col1, col2, col3 = tx + 15, tx + 80, tx + 260
-            y_base = ty + 65
-            line_space = 30
+            # Calculated Column Offsets
+            col1 = tx + t2_pad_x
+            col2 = col1 + t2_col1_w
+            col3 = col2 + t2_col2_w
+            y_base = ty + t2_pad_y_top + 35
 
             # Headers
             cv2.putText(frame, "#", (col1, y_base), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
@@ -867,10 +913,9 @@ def overlay_kinematic_assessment(input_video_path,
 
             # Populate Smash Rows
             for i, a in enumerate(assessments):
-                row_y = y_base + (i + 1) * line_space
+                row_y = y_base + (i + 1) * t2_row_h
                 c_risk, txt_risk = _get_risk_visuals(a.overall_risk)
 
-                # Format time string cleanly (e.g. 02:25 - 02:26)
                 time_span = f"{a.start_time_str[:5]} - {a.end_time_str[:5]}"
 
                 cv2.putText(frame, str(i + 1), (col1, row_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
