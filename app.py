@@ -84,6 +84,21 @@ HTML_TOP = """
 
 HTML_BOTTOM = """
     </div>
+    <!-- Include Bootstrap JS for collapsible components -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    
+    <!-- Helper Script for seeking video times -->
+    <script>
+        function seekVideo(videoId, timeInSeconds) {
+            var video = document.getElementById(videoId);
+            if(video) {
+                video.currentTime = timeInSeconds;
+                // video.play();
+                // Optionally scroll video into view
+                video.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+        }
+    </script>
 </body>
 </html>
 """
@@ -122,12 +137,14 @@ LIST_HTML = HTML_TOP + """
                 <td class="align-middle">
                     {% if instance.has_assessment %}
                         <span class="badge bg-success">Assessed</span>
+                    {% elif instance.has_analysis %}
+                        <span class="badge bg-info text-dark">Analyzed</span>
                     {% else %}
-                        <span class="badge bg-warning text-dark">Data Extracted</span>
+                        <span class="badge bg-warning text-dark">Uploaded (Pending Analysis)</span>
                     {% endif %}
                 </td>
                 <td class="text-end">
-                    <a href="/analyses/{{ instance.id }}" class="btn btn-sm btn-primary">View / Assess</a>
+                    <a href="/analyses/{{ instance.id }}" class="btn btn-sm btn-primary">View / Process</a>
                     <form action="/analyses/{{ instance.id }}/delete" method="POST" class="d-inline">
                         <button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('Delete this instance forever?');">Delete</button>
                     </form>
@@ -147,7 +164,7 @@ NEW_HTML = HTML_TOP + """
         <div class="card shadow-sm">
             <div class="card-header bg-white"><h4 class="mb-0">Upload New Video</h4></div>
             <div class="card-body">
-                <form action="/analyses/new" method="POST" enctype="multipart/form-data">
+                <form action="/analyses/new" method="POST" enctype="multipart/form-data" onsubmit="document.getElementById('uploadBtn').disabled=true; document.getElementById('uploadBtn').innerHTML='Uploading...'; return true;">
                     <div class="mb-3">
                         <label class="form-label">Video File (.mp4, .mov)</label>
                         <input class="form-control" type="file" name="video" accept="video/*" required>
@@ -156,7 +173,7 @@ NEW_HTML = HTML_TOP + """
                         <label class="form-label">Note (Optional)</label>
                         <input type="text" class="form-control" name="note" placeholder="e.g., Player A - Baseline Smashes">
                     </div>
-                    <button type="submit" class="btn btn-primary w-100">Upload & Extract Metrics</button>
+                    <button type="submit" id="uploadBtn" class="btn btn-primary w-100">Upload Video</button>
                 </form>
             </div>
         </div>
@@ -170,29 +187,68 @@ DETAIL_HTML = HTML_TOP + """
     <a href="/analyses" class="btn btn-outline-secondary btn-sm">Back to List</a>
 </div>
 
+<!-- Smash Analysis Panel -->
+<div class="card shadow-sm mb-4 border-info">
+    <div class="card-body">
+        <h5 class="card-title">Smash Analysis</h5>
+        <p class="text-muted small mb-3">Extract kinematics and identify smash timeframes.</p>
+        
+        <!-- Source Video Display -->
+        <div class="mb-3 text-center bg-dark rounded">
+            <video id="sourceVideo" src="/analyses/{{ instance_id }}/{{ input_filename }}" controls class="w-100"></video>
+        </div>
+
+        {% if not has_analysis %}
+        <form action="/analyses/{{ instance_id }}/analyze" method="POST" onsubmit="document.getElementById('analyzeBtn').disabled=true; document.getElementById('analyzeBtn').innerHTML='Processing...'; return true;">
+            <button type="submit" id="analyzeBtn" class="btn btn-info w-100 text-white">Analyze Smashes</button>
+        </form>
+        {% else %}
+        <div class="mb-2 py-2">
+            Found <strong>{{ smashes|length }}</strong> smashes.
+        </div>
+        <button class="btn btn-outline-info mb-0" type="button" data-bs-toggle="collapse" data-bs-target="#smashesList">
+            View Smash Times
+        </button>
+        <div class="collapse mt-2" id="smashesList">
+            <ul class="list-group">
+            {% for smash in smashes %}
+                <li class="list-group-item list-group-item-action d-flex justify-content-between align-items-center" style="cursor:pointer;" onclick="seekVideo('sourceVideo', {{ smash.start_frame_idx / fps }})" title="Click to seek video">
+                    <span><strong>Smash {{ loop.index }}</strong>: {{ smash.start_time_str }} - {{ smash.end_time_str }}</span>
+                    <span class="badge bg-secondary rounded-pill">Seek Video</span>
+                </li>
+            {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
 <!-- Assessment Control Panel -->
 <div class="card shadow-sm mb-4 border-primary">
     <div class="card-body">
         <h5 class="card-title">Run Injury Risk Assessment</h5>
-        <form action="/analyses/{{ instance_id }}" method="POST" class="row g-3 align-items-end">
+        <form action="/analyses/{{ instance_id }}" method="POST" class="row g-3 align-items-end" onsubmit="document.getElementById('assessBtn').disabled=true; document.getElementById('assessBtn').innerHTML='Processing...'; return true;">
             <div class="col-md-7">
                 <label class="form-label">Max Critical Deceleration (deg/s²)</label>
                 <div class="input-group">
                     <div class="input-group-text">
-                        <input class="form-check-input mt-0" type="radio" name="dec_option" value="auto" checked>
+                        <input class="form-check-input mt-0" type="radio" name="dec_option" value="auto" {% if saved_dec_option == 'auto' %}checked{% endif %} {% if not has_analysis %}disabled{% endif %}>
                         <span class="ms-2">Auto (Max recorded: {{ auto_max_dec|round|int }})</span>
                     </div>
                     <div class="input-group-text">
-                        <input class="form-check-input mt-0" type="radio" name="dec_option" value="custom">
+                        <input class="form-check-input mt-0" type="radio" name="dec_option" value="custom" {% if saved_dec_option == 'custom' %}checked{% endif %} {% if not has_analysis %}disabled{% endif %}>
                         <span class="ms-2">Custom</span>
                     </div>
-                    <input type="number" class="form-control" name="custom_dec" placeholder="e.g. 15000">
+                    <input type="number" class="form-control" name="custom_dec" value="{{ saved_custom_dec }}" placeholder="e.g. 15000" {% if not has_analysis %}disabled{% endif %}>
                 </div>
             </div>
             <div class="col-md-3">
-                <button type="submit" class="btn btn-primary w-100">Generate Assessment</button>
+                <button type="submit" id="assessBtn" class="btn btn-primary w-100" {% if not has_analysis %}disabled{% endif %}>Generate Assessment</button>
             </div>
         </form>
+        {% if not has_analysis %}
+        <small class="text-danger mt-2 d-block">Please run Smash Analysis first.</small>
+        {% endif %}
     </div>
 </div>
 
@@ -203,7 +259,7 @@ DETAIL_HTML = HTML_TOP + """
         <div class="card shadow-sm h-100">
             <div class="card-header bg-white"><h5 class="mb-0">Kinematic Overlay Video</h5></div>
             <div class="card-body p-0">
-                <video src="/analyses/{{ instance_id }}/analyzed.mp4" controls class="w-100" style="background: #000;"></video>
+                <video id="analyzedVideo" src="/analyses/{{ instance_id }}/analyzed.mp4" controls class="w-100" style="background: #000;"></video>
             </div>
         </div>
     </div>
@@ -227,26 +283,30 @@ DETAIL_HTML = HTML_TOP + """
                 <tbody>
                     {% for a in assessments %}
                     <tr>
-                        <td>{{ loop.index }}</td>
-                        <td>{{ a.start_time_str[:5] }} - {{ a.end_time_str[:5] }}</td>
+                        <td class="align-middle">{{ loop.index }}</td>
+                        <td class="align-middle">
+                            <a href="javascript:void(0);" onclick="seekVideo('analyzedVideo', {{ smashes[loop.index0].start_frame_idx / fps }})" class="text-decoration-none fw-bold" title="Click to view in video">
+                                {{ a.start_time_str[:5] }} - {{ a.end_time_str[:5] }}
+                            </a>
+                        </td>
                         
                         <!-- P-D Sequence Cell -->
-                        <td class="{% if a.p_d_sequence_risk == 0 %}{% elif a.p_d_sequence_risk == 1 %}text-warning{% else %}text-danger{% endif %}">
+                        <td class="align-middle {% if a.p_d_sequence_risk == 0 %}{% elif a.p_d_sequence_risk == 1 %}text-warning{% else %}text-danger{% endif %}">
                             {{ format_sequence(a.p_d_sequence) }}
                         </td>
                         
                         <!-- Velocity Amplification Cell -->
-                        <td class="{% if a.velocity_amplification_risk == 0 %}{% elif a.velocity_amplification_risk == 1 %}text-warning{% else %}text-danger{% endif %}">
+                        <td class="align-middle {% if a.velocity_amplification_risk == 0 %}{% elif a.velocity_amplification_risk == 1 %}text-warning{% else %}text-danger{% endif %}">
                             {{ format_sequence(a.velocity_amplification) }}
                         </td>
                         
                         <!-- UA Deceleration Cell -->
-                        <td class="{% if a.critical_deceleration_risk == 0 %}{% elif a.critical_deceleration_risk == 1 %}text-warning{% else %}text-danger{% endif %}">
+                        <td class="align-middle {% if a.critical_deceleration_risk == 0 %}{% elif a.critical_deceleration_risk == 1 %}text-warning{% else %}text-danger{% endif %}">
                             {{ a.critical_deceleration|abs|round|int }}
                         </td>
                         
-                        <!-- Overall Risk Cell (Unchanged Badges) -->
-                        <td>
+                        <!-- Overall Risk Cell -->
+                        <td class="align-middle">
                             {% if a.overall_risk == 0 %}<span class="badge bg-success">Low</span>
                             {% elif a.overall_risk == 1 %}<span class="badge bg-warning text-dark">Mod</span>
                             {% else %}<span class="badge bg-danger">High</span>{% endif %}
@@ -291,8 +351,15 @@ def list_analyses():
         instance_id = os.path.basename(d)
         note_path = os.path.join(d, 'note.txt')
         note = open(note_path).read() if os.path.exists(note_path) else "No note"
+
+        has_analysis = os.path.exists(os.path.join(d, 'smashes.json'))
         has_assessment = os.path.exists(os.path.join(d, 'assessments.json'))
-        instances.append({'id': instance_id, 'note': note, 'has_assessment': has_assessment})
+        instances.append({
+            'id': instance_id,
+            'note': note,
+            'has_analysis': has_analysis,
+            'has_assessment': has_assessment
+        })
 
     return render_template_string(LIST_HTML, instances=instances)
 
@@ -326,27 +393,48 @@ def new_analysis():
         input_video_path = os.path.join(instance_dir, f'input{ext}')
         video_file.save(input_video_path)
 
-        # Run Phase 1 Processing (Extraction & Detection)
-        try:
-            # Note: Forcing FPS to 30.0 by default to prevent video timescale metadata corruption
-            metrics, fps = extract_kinematic_metrics(input_video_path)
-            smashes = find_smashes(metrics, fps)
+        # Initialize meta data. Dec_option defaults to auto.
+        with open(os.path.join(instance_dir, 'meta.json'), 'w') as f:
+            json.dump({
+                "input_filename": f'input{ext}',
+                "dec_option": "auto",
+                "custom_dec": ""
+            }, f)
 
-            save_json(os.path.join(instance_dir, 'kinematics.json'), metrics)
-            save_json(os.path.join(instance_dir, 'smashes.json'), smashes)
-
-            # Save raw FPS for Phase 2
-            with open(os.path.join(instance_dir, 'meta.json'), 'w') as f:
-                json.dump({"fps": fps, "input_filename": f'input{ext}'}, f)
-
-            flash("Video successfully analyzed for smashes. Ready for assessment.", "success")
-            return redirect(url_for('detail_analysis', instance_id=instance_id))
-        except Exception as e:
-            shutil.rmtree(instance_dir) # Cleanup on failure
-            flash(f"Analysis failed: {str(e)}", "error")
-            return redirect(request.url)
+        flash("Video successfully uploaded. Ready for Smash Analysis.", "success")
+        return redirect(url_for('detail_analysis', instance_id=instance_id))
 
     return render_template_string(NEW_HTML)
+
+@app.route('/analyses/<instance_id>/analyze', methods=['POST'])
+def analyze_smashes(instance_id):
+    instance_dir = os.path.join(ANALYSES_DIR, instance_id)
+    if not os.path.exists(instance_dir):
+        flash("Analysis not found.", "error")
+        return redirect(url_for('list_analyses'))
+
+    meta_path = os.path.join(instance_dir, 'meta.json')
+    meta = json.load(open(meta_path))
+    input_video_path = os.path.join(instance_dir, meta['input_filename'])
+
+    try:
+        # Run Phase 1 Processing (Extraction & Detection)
+        metrics, fps = extract_kinematic_metrics(input_video_path)
+        smashes = find_smashes(metrics, fps)
+
+        save_json(os.path.join(instance_dir, 'kinematics.json'), metrics)
+        save_json(os.path.join(instance_dir, 'smashes.json'), smashes)
+
+        # Update meta with extracted FPS
+        meta['fps'] = fps
+        with open(meta_path, 'w') as f:
+            json.dump(meta, f)
+
+        flash("Smash analysis complete. Ready for Risk Assessment.", "success")
+    except Exception as e:
+        flash(f"Analysis failed: {str(e)}", "error")
+
+    return redirect(url_for('detail_analysis', instance_id=instance_id))
 
 @app.route('/analyses/<instance_id>', methods=['GET', 'POST'])
 def detail_analysis(instance_id):
@@ -356,19 +444,34 @@ def detail_analysis(instance_id):
         return redirect(url_for('list_analyses'))
 
     # Load required data
-    smashes = load_json(os.path.join(instance_dir, 'smashes.json'), SmashEvent)
-    meta = json.load(open(os.path.join(instance_dir, 'meta.json')))
-    fps = meta['fps']
+    meta_path = os.path.join(instance_dir, 'meta.json')
+    meta = json.load(open(meta_path))
+    fps = meta.get('fps', None)
     input_video_path = os.path.join(instance_dir, meta['input_filename'])
 
-    # Auto-calculate max deceleration to pre-fill UI
+    smashes = load_json(os.path.join(instance_dir, 'smashes.json'), SmashEvent)
+    has_analysis = smashes is not None
+
+    # Auto-calculate max deceleration to pre-fill UI (only if analysis is done)
     auto_max_dec = max([abs(s.critical_deceleration) for s in smashes]) if smashes else 0.0
 
     if request.method == 'POST':
+        if not has_analysis:
+            flash("Please run Smash Analysis first.", "error")
+            return redirect(request.url)
+
+        # Save Assessment Params to restore them next time
+        dec_option = request.form.get('dec_option', 'auto')
+        custom_dec = request.form.get('custom_dec', '')
+
+        meta['dec_option'] = dec_option
+        meta['custom_dec'] = custom_dec
+        with open(meta_path, 'w') as f:
+            json.dump(meta, f)
+
         # Phase 2: Assessment & Visualization Output Generation
-        dec_option = request.form.get('dec_option')
-        if dec_option == 'custom' and request.form.get('custom_dec'):
-            max_dec = float(request.form.get('custom_dec'))
+        if dec_option == 'custom' and custom_dec:
+            max_dec = float(custom_dec)
         else:
             max_dec = auto_max_dec
 
@@ -401,7 +504,13 @@ def detail_analysis(instance_id):
     return render_template_string(
         DETAIL_HTML,
         instance_id=instance_id,
+        input_filename=meta.get('input_filename'),
+        fps=fps,
         auto_max_dec=auto_max_dec,
+        saved_dec_option=meta.get('dec_option', 'auto'),
+        saved_custom_dec=meta.get('custom_dec', ''),
+        has_analysis=has_analysis,
+        smashes=smashes or [],
         has_assessment=(assessments is not None),
         assessments=assessments or []
     )
@@ -417,5 +526,5 @@ def absolute_value(number):
     return abs(number)
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    app.run(debug=True, port=5001)
 # endregion

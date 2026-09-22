@@ -728,6 +728,24 @@ def overlay_kinematic_assessment(input_video_path,
     c_forearm = (0, 165, 255)
     c_grip = (0, 0, 255)
 
+    # --- DYNAMIC SCALING SETUP ---
+    size_scale = width / 1024.0
+
+    # Fonts
+    font_title = max(0.4, 0.7 * size_scale)
+    font_header = max(0.3, 0.6 * size_scale)
+    font_base = max(0.3, 0.5 * size_scale)
+    font_small = max(0.2, 0.4 * size_scale)
+
+    # Thicknesses (Must be integers >= 1)
+    thick_thin = max(1, int(1 * size_scale))
+    thick_med = max(1, int(2 * size_scale))
+    thick_thick = max(1, int(3 * size_scale))
+
+    # Radii and Offsets
+    circle_radius = max(2, int(5 * size_scale))
+    off_x = int(15 * size_scale)
+
     print("Rendering kinematic assessment video...")
     frame_idx = 0
 
@@ -747,18 +765,18 @@ def overlay_kinematic_assessment(input_video_path,
             start_pt = m.trunk_coord
             end_pt = (int(start_pt[0] + m.trunk_v[0] * scale_linear),
                       int(start_pt[1] + m.trunk_v[1] * scale_linear))
-            cv2.arrowedLine(frame, start_pt, end_pt, c_trunk, 3, tipLength=0.25)
-            cv2.circle(frame, start_pt, 5, (0, 0, 255), -1)
+            cv2.arrowedLine(frame, start_pt, end_pt, c_trunk, thick_thick, tipLength=0.25)
+            cv2.circle(frame, start_pt, circle_radius, (0, 0, 255), -1)
             if show_labels:
                 cv2.putText(frame, f"Trunk: {fmt_v.format(m.trunk_speed / divisor)} {unit_v}",
-                            (start_pt[0] + 15, start_pt[1] + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, c_trunk, 2, cv2.LINE_AA)
+                            (start_pt[0] + off_x, start_pt[1] + int(20 * size_scale)), cv2.FONT_HERSHEY_SIMPLEX, font_base, c_trunk, thick_med, cv2.LINE_AA)
 
         if m.elbow_coord and m.shoulder_coord:
             start_pt = m.elbow_coord
             if m.elbow_speed > 30:
                 end_pt_vel = (int(start_pt[0] + m.elbow_v[0] * scale_linear),
                               int(start_pt[1] + m.elbow_v[1] * scale_linear))
-                cv2.arrowedLine(frame, start_pt, end_pt_vel, c_upper_arm, 3, tipLength=0.25)
+                cv2.arrowedLine(frame, start_pt, end_pt_vel, c_upper_arm, thick_thick, tipLength=0.25)
 
                 ang_accel = m.upper_arm_angular_deceleration
                 dx = m.elbow_coord[0] - m.shoulder_coord[0]
@@ -770,34 +788,34 @@ def overlay_kinematic_assessment(input_video_path,
                     visual_ax = perp_dx * ang_accel * scale_ang_accel
                     visual_ay = perp_dy * ang_accel * scale_ang_accel
                     end_pt_accel = (int(start_pt[0] + visual_ax), int(start_pt[1] + visual_ay))
-                    _draw_double_arrow(frame, start_pt, end_pt_accel, c_accel, thickness=2)
+                    _draw_double_arrow(frame, start_pt, end_pt_accel, c_accel, thickness=thick_med)
 
-                cv2.circle(frame, start_pt, 5, (0, 0, 255), -1)
+                cv2.circle(frame, start_pt, circle_radius, (0, 0, 255), -1)
                 if show_labels:
                     cv2.putText(frame, f"Upper Arm: {fmt_v.format(m.elbow_speed / divisor)} {unit_v}",
-                                (start_pt[0] + 15, start_pt[1] - 25), cv2.FONT_HERSHEY_SIMPLEX, 0.5, c_upper_arm, 2, cv2.LINE_AA)
+                                (start_pt[0] + off_x, start_pt[1] - int(25 * size_scale)), cv2.FONT_HERSHEY_SIMPLEX, font_base, c_upper_arm, thick_med, cv2.LINE_AA)
                     cv2.putText(frame, f"Accel: {int(ang_accel)} deg/s^2",
-                                (start_pt[0] + 15, start_pt[1] - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.4, c_accel, 1, cv2.LINE_AA)
+                                (start_pt[0] + off_x, start_pt[1] - int(8 * size_scale)), cv2.FONT_HERSHEY_SIMPLEX, font_small, c_accel, thick_thin, cv2.LINE_AA)
 
         if m.wrist_coord and m.wrist_speed > 40:
             start_pt = m.wrist_coord
             end_pt = (int(start_pt[0] + m.wrist_v[0] * scale_linear),
                       int(start_pt[1] + m.wrist_v[1] * scale_linear))
-            cv2.arrowedLine(frame, start_pt, end_pt, c_forearm, 3, tipLength=0.25)
-            cv2.circle(frame, start_pt, 5, (0, 0, 255), -1)
+            cv2.arrowedLine(frame, start_pt, end_pt, c_forearm, thick_thick, tipLength=0.25)
+            cv2.circle(frame, start_pt, circle_radius, (0, 0, 255), -1)
             if show_labels:
                 cv2.putText(frame, f"Forearm: {fmt_v.format(m.wrist_speed / divisor)} {unit_v}",
-                            (start_pt[0] + 15, start_pt[1] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, c_forearm, 2, cv2.LINE_AA)
+                            (start_pt[0] + off_x, start_pt[1] - int(20 * size_scale)), cv2.FONT_HERSHEY_SIMPLEX, font_base, c_forearm, thick_med, cv2.LINE_AA)
 
         if m.grip_coord and m.grip_speed > 50:
             start_pt = m.grip_coord
             end_pt = (int(start_pt[0] + m.grip_v[0] * scale_linear),
                       int(start_pt[1] + m.grip_v[1] * scale_linear))
-            cv2.arrowedLine(frame, start_pt, end_pt, c_grip, 3, tipLength=0.25)
-            cv2.circle(frame, start_pt, 5, (0, 0, 255), -1)
+            cv2.arrowedLine(frame, start_pt, end_pt, c_grip, thick_thick, tipLength=0.25)
+            cv2.circle(frame, start_pt, circle_radius, (0, 0, 255), -1)
             if show_labels:
                 cv2.putText(frame, f"Racket Grip: {fmt_v.format(m.grip_speed / divisor)} {unit_v}",
-                            (start_pt[0] + 15, start_pt[1] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, c_grip, 2, cv2.LINE_AA)
+                            (start_pt[0] + off_x, start_pt[1] - int(20 * size_scale)), cv2.FONT_HERSHEY_SIMPLEX, font_base, c_grip, thick_med, cv2.LINE_AA)
 
         # --- 2. DRAW HUD TABLES ---
 
@@ -814,22 +832,21 @@ def overlay_kinematic_assessment(input_video_path,
             # ==========================================
             # TABLE 1 LAYOUT PARAMETERS
             # ==========================================
-            t1_margin_right = 15       # Pixels from the right edge of the video
-            t1_y_from_top = height - 260 # Base Y position (top of the table)
+            t1_margin_right = int(15 * size_scale)
+            t1_y_from_top = height - int(260 * size_scale)
 
-            t1_pad_x = 15              # Inner left and right padding
-            t1_pad_y_top = 30          # Distance from table top to title text baseline
-            t1_row_h = 30              # Vertical height of each data row
-            t1_bottom_pad = 15         # Padding below the last row
+            t1_pad_x = int(15 * size_scale)
+            t1_pad_y_top = int(30 * size_scale)
+            t1_row_h = int(30 * size_scale)
+            t1_bottom_pad = int(15 * size_scale)
 
-            t1_col1_w = 80             # Width of "Feature" column
-            t1_col2_w = 200            # Width of "Result" column
-            t1_col3_w = 40             # Width of "Risk" column
+            t1_col1_w = int(80 * size_scale)
+            t1_col2_w = int(200 * size_scale)
+            t1_col3_w = int(40 * size_scale)
             # ==========================================
 
-            # --- Calculated Dimensions ---
             tw = t1_pad_x + t1_col1_w + t1_col2_w + t1_col3_w + t1_pad_x
-            th = t1_pad_y_top + 10 + t1_row_h + (3 * t1_row_h) + t1_bottom_pad
+            th = t1_pad_y_top + int(10 * size_scale) + t1_row_h + (3 * t1_row_h) + t1_bottom_pad
 
             tx = width - tw - t1_margin_right
             ty = t1_y_from_top
@@ -837,37 +854,37 @@ def overlay_kinematic_assessment(input_video_path,
             _draw_table_overlay(frame, tx, ty, tw, th)
 
             # Titles & Headers
-            cv2.putText(frame, f"Smash {active_smash_idx + 1}", (tx + t1_pad_x, ty + t1_pad_y_top), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
-            cv2.line(frame, (tx + t1_pad_x, ty + t1_pad_y_top + 10), (tx + tw - t1_pad_x, ty + t1_pad_y_top + 10), (255, 255, 255), 1)
+            cv2.putText(frame, f"Smash {active_smash_idx + 1}", (tx + t1_pad_x, ty + t1_pad_y_top), cv2.FONT_HERSHEY_SIMPLEX, font_title, (255, 255, 255), thick_med, cv2.LINE_AA)
+            cv2.line(frame, (tx + t1_pad_x, ty + t1_pad_y_top + int(10 * size_scale)), (tx + tw - t1_pad_x, ty + t1_pad_y_top + int(10 * size_scale)), (255, 255, 255), thick_thin)
 
             # Calculated Column Offsets
             col1 = tx + t1_pad_x
             col2 = col1 + t1_col1_w
             col3 = col2 + t1_col2_w
-            y_base = ty + t1_pad_y_top + 40 # Header baseline
+            y_base = ty + t1_pad_y_top + int(40 * size_scale)
 
             # Headers
-            cv2.putText(frame, "Feature", (col1, y_base), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
-            cv2.putText(frame, "Result", (col2, y_base), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
-            cv2.putText(frame, "Risk", (col3, y_base), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
+            cv2.putText(frame, "Feature", (col1, y_base), cv2.FONT_HERSHEY_SIMPLEX, font_base, (200, 200, 200), thick_thin, cv2.LINE_AA)
+            cv2.putText(frame, "Result", (col2, y_base), cv2.FONT_HERSHEY_SIMPLEX, font_base, (200, 200, 200), thick_thin, cv2.LINE_AA)
+            cv2.putText(frame, "Risk", (col3, y_base), cv2.FONT_HERSHEY_SIMPLEX, font_base, (200, 200, 200), thick_thin, cv2.LINE_AA)
 
             # Row 1: P-D Sequence
             c_pd, txt_pd = _get_risk_visuals(a.p_d_sequence_risk)
-            cv2.putText(frame, "P-D Seq", (col1, y_base + t1_row_h), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
-            cv2.putText(frame, format_sequence(a.p_d_sequence), (col2, y_base + t1_row_h), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
-            cv2.putText(frame, txt_pd, (col3, y_base + t1_row_h), cv2.FONT_HERSHEY_SIMPLEX, 0.5, c_pd, 2, cv2.LINE_AA)
+            cv2.putText(frame, "P-D Seq", (col1, y_base + t1_row_h), cv2.FONT_HERSHEY_SIMPLEX, font_base, (255, 255, 255), thick_thin, cv2.LINE_AA)
+            cv2.putText(frame, format_sequence(a.p_d_sequence), (col2, y_base + t1_row_h), cv2.FONT_HERSHEY_SIMPLEX, font_base, (255, 255, 255), thick_thin, cv2.LINE_AA)
+            cv2.putText(frame, txt_pd, (col3, y_base + t1_row_h), cv2.FONT_HERSHEY_SIMPLEX, font_base, c_pd, thick_med, cv2.LINE_AA)
 
             # Row 2: Velocity Amplification
             c_amp, txt_amp = _get_risk_visuals(a.velocity_amplification_risk)
-            cv2.putText(frame, "V-Amp", (col1, y_base + t1_row_h * 2), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
-            cv2.putText(frame, format_sequence(a.velocity_amplification), (col2, y_base + t1_row_h * 2), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
-            cv2.putText(frame, txt_amp, (col3, y_base + t1_row_h * 2), cv2.FONT_HERSHEY_SIMPLEX, 0.5, c_amp, 2, cv2.LINE_AA)
+            cv2.putText(frame, "V-Amp", (col1, y_base + t1_row_h * 2), cv2.FONT_HERSHEY_SIMPLEX, font_base, (255, 255, 255), thick_thin, cv2.LINE_AA)
+            cv2.putText(frame, format_sequence(a.velocity_amplification), (col2, y_base + t1_row_h * 2), cv2.FONT_HERSHEY_SIMPLEX, font_base, (255, 255, 255), thick_thin, cv2.LINE_AA)
+            cv2.putText(frame, txt_amp, (col3, y_base + t1_row_h * 2), cv2.FONT_HERSHEY_SIMPLEX, font_base, c_amp, thick_med, cv2.LINE_AA)
 
             # Row 3: UA Deceleration
             c_dec, txt_dec = _get_risk_visuals(a.critical_deceleration_risk)
-            cv2.putText(frame, "UA Decel", (col1, y_base + t1_row_h * 3), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
-            cv2.putText(frame, f"{abs(a.critical_deceleration):.0f} deg/s²", (col2, y_base + t1_row_h * 3), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
-            cv2.putText(frame, txt_dec, (col3, y_base + t1_row_h * 3), cv2.FONT_HERSHEY_SIMPLEX, 0.5, c_dec, 2, cv2.LINE_AA)
+            cv2.putText(frame, "UA Decel", (col1, y_base + t1_row_h * 3), cv2.FONT_HERSHEY_SIMPLEX, font_base, (255, 255, 255), thick_thin, cv2.LINE_AA)
+            cv2.putText(frame, f"{abs(a.critical_deceleration):.0f} deg/s²", (col2, y_base + t1_row_h * 3), cv2.FONT_HERSHEY_SIMPLEX, font_base, (255, 255, 255), thick_thin, cv2.LINE_AA)
+            cv2.putText(frame, txt_dec, (col3, y_base + t1_row_h * 3), cv2.FONT_HERSHEY_SIMPLEX, font_base, c_dec, thick_med, cv2.LINE_AA)
 
         # Render Table 2: Overall Summary (After the last smash completes)
         elif frame_idx > summary_start_frame:
@@ -875,21 +892,20 @@ def overlay_kinematic_assessment(input_video_path,
             # ==========================================
             # TABLE 2 LAYOUT PARAMETERS
             # ==========================================
-            t2_margin_right = 30       # Pixels from the right edge
-            t2_margin_bottom = 90      # Pixels from the bottom edge
+            t2_margin_right = int(30 * size_scale)
+            t2_margin_bottom = int(90 * size_scale)
 
-            t2_pad_x = 15
-            t2_pad_y_top = 30
-            t2_row_h = 30
+            t2_pad_x = int(15 * size_scale)
+            t2_pad_y_top = int(30 * size_scale)
+            t2_row_h = int(30 * size_scale)
 
-            t2_col1_w = 45             # Width of "#" column
-            t2_col2_w = 120            # Width of "Time" column
-            t2_col3_w = 35             # Width of "Risk" column
+            t2_col1_w = int(80 * size_scale)
+            t2_col2_w = int(200 * size_scale)
+            t2_col3_w = int(40 * size_scale)
             # ==========================================
 
-            # --- Calculated Dimensions ---
             tw = t2_pad_x + t2_col1_w + t2_col2_w + t2_col3_w + t2_pad_x
-            th = 80 + (len(assessments) * t2_row_h)
+            th = int(80 * size_scale) + (len(assessments) * t2_row_h)
 
             tx = width - tw - t2_margin_right
             ty = height - th - t2_margin_bottom
@@ -897,19 +913,19 @@ def overlay_kinematic_assessment(input_video_path,
             _draw_table_overlay(frame, tx, ty, tw, th)
 
             # Title
-            cv2.putText(frame, "Smash Assessment Summary", (tx + t2_pad_x, ty + t2_pad_y_top), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
-            cv2.line(frame, (tx + t2_pad_x, ty + t2_pad_y_top + 10), (tx + tw - t2_pad_x, ty + t2_pad_y_top + 10), (255, 255, 255), 1)
+            cv2.putText(frame, "Smash Assessment Summary", (tx + t2_pad_x, ty + t2_pad_y_top), cv2.FONT_HERSHEY_SIMPLEX, font_header, (255, 255, 255), thick_med, cv2.LINE_AA)
+            cv2.line(frame, (tx + t2_pad_x, ty + t2_pad_y_top + int(10 * size_scale)), (tx + tw - t2_pad_x, ty + t2_pad_y_top + int(10 * size_scale)), (255, 255, 255), thick_thin)
 
             # Calculated Column Offsets
             col1 = tx + t2_pad_x
             col2 = col1 + t2_col1_w
             col3 = col2 + t2_col2_w
-            y_base = ty + t2_pad_y_top + 35
+            y_base = ty + t2_pad_y_top + int(35 * size_scale)
 
             # Headers
-            cv2.putText(frame, "#", (col1, y_base), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
-            cv2.putText(frame, "Time", (col2, y_base), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
-            cv2.putText(frame, "Risk", (col3, y_base), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
+            cv2.putText(frame, "#", (col1, y_base), cv2.FONT_HERSHEY_SIMPLEX, font_base, (200, 200, 200), thick_thin, cv2.LINE_AA)
+            cv2.putText(frame, "Time", (col2, y_base), cv2.FONT_HERSHEY_SIMPLEX, font_base, (200, 200, 200), thick_thin, cv2.LINE_AA)
+            cv2.putText(frame, "Risk", (col3, y_base), cv2.FONT_HERSHEY_SIMPLEX, font_base, (200, 200, 200), thick_thin, cv2.LINE_AA)
 
             # Populate Smash Rows
             for i, a in enumerate(assessments):
@@ -918,9 +934,9 @@ def overlay_kinematic_assessment(input_video_path,
 
                 time_span = f"{a.start_time_str[:5]} - {a.end_time_str[:5]}"
 
-                cv2.putText(frame, str(i + 1), (col1, row_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
-                cv2.putText(frame, time_span, (col2, row_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
-                cv2.putText(frame, txt_risk, (col3, row_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, c_risk, 2, cv2.LINE_AA)
+                cv2.putText(frame, str(i + 1), (col1, row_y), cv2.FONT_HERSHEY_SIMPLEX, font_base, (255, 255, 255), thick_thin, cv2.LINE_AA)
+                cv2.putText(frame, time_span, (col2, row_y), cv2.FONT_HERSHEY_SIMPLEX, font_base, (255, 255, 255), thick_thin, cv2.LINE_AA)
+                cv2.putText(frame, txt_risk, (col3, row_y), cv2.FONT_HERSHEY_SIMPLEX, font_base, c_risk, thick_med, cv2.LINE_AA)
 
         out.write(frame)
         frame_idx += 1
