@@ -11,11 +11,12 @@ from flask import Flask, render_template_string, request, redirect, url_for, sen
 os.environ['HEADLESS_MODE'] = '1'
 
 # Import your analysis pipeline
+import cv2
 from smash_analysis import (
     extract_kinematic_metrics, find_smashes, assess_smashes,
     plot_smashes_kinematics, overlay_kinematic_assessment,
     FrameMetrics, SmashEvent, SmashAssessment, RiskLevel,
-    format_sequence
+    format_sequence, _format_timestamp
 )
 
 app = Flask(__name__)
@@ -255,8 +256,8 @@ NEW_HTML = HTML_TOP + """
             <div class="card-body">
                 <form action="/analyses/new" method="POST" enctype="multipart/form-data" onsubmit="document.getElementById('uploadBtn').disabled=true; document.getElementById('uploadBtn').innerHTML='Uploading...'; return true;">
                     <div class="mb-3">
-                        <label class="form-label">Video File (.mp4, .mov)</label>
-                        <input class="form-control" type="file" name="video" accept="video/*" onchange="document.getElementById('noteInput').value = this.files[0].name" required>
+                        <label class="form-label">Video Files (.mp4, .mov)</label>
+                        <input class="form-control" type="file" name="videos" accept="video/*" multiple onchange="document.getElementById('noteInput').value = Array.from(this.files, file => file.name).join(', ')" required>
                     </div>
                     <div class="mb-4">
                         <label class="form-label">Note (Optional)</label>
@@ -467,6 +468,32 @@ DETAIL_HTML = HTML_TOP + """
 """ + HTML_BOTTOM
 # endregion
 
+# region Helper
+def _concatenate_videos(input_paths: list[str], output_path: str):
+    """Stitches multiple video files into a single continuous MP4."""
+    if not input_paths: return
+
+    cap = cv2.VideoCapture(input_paths[0])
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    cap.release()
+
+    fourcc = cv2.VideoWriter_fourcc(*'avc1')
+    out = cv2.VideoWriter(output_path, fourcc, int(fps), (width, height))
+
+    for p in input_paths:
+        cap = cv2.VideoCapture(p)
+        while True:
+            ret, frame = cap.read()
+            if not ret: break
+            # Force uniform dimensions to prevent VideoWriter crash on mixed resolutions
+            if frame.shape[1] != width or frame.shape[0] != height:
+                frame = cv2.resize(frame, (width, height))
+            out.write(frame)
+        cap.release()
+    out.release()
+# endregion
 
 # region Routes
 @app.route('/')
@@ -506,14 +533,13 @@ def delete_analysis(instance_id):
 @app.route('/analyses/new', methods=['GET', 'POST'])
 def new_analysis():
     if request.method == 'POST':
-        video_file = request.files.get('video')
+        video_files = request.files.getlist('videos') # Retrieve multiple files
         note = request.form.get('note', '')
 
-        if not video_file or video_file.filename == '':
+        if not video_files or video_files[0].filename == '':
             flash("No video selected.", "error")
             return redirect(request.url)
 
-        # Generate instance ID and setup directories
         instance_id = datetime.now().strftime("%Y%m%d_%H%M%S")
         instance_dir = os.path.join(ANALYSES_DIR, instance_id)
         os.makedirs(instance_dir)
@@ -521,19 +547,22 @@ def new_analysis():
         with open(os.path.join(instance_dir, 'note.txt'), 'w') as f:
             f.write(note)
 
-        ext = os.path.splitext(video_file.filename)[1]
-        input_video_path = os.path.join(instance_dir, f'input{ext}')
-        video_file.save(input_video_path)
+        saved_files = []
+        for i, vf in enumerate(video_files):
+            ext = os.path.splitext(vf.filename)[1]
+            save_path = f'raw_{i}{ext}'
+            vf.save(os.path.join(instance_dir, save_path))
+            saved_files.append(save_path)
 
-        # Initialize meta data. Dec_option defaults to auto.
         with open(os.path.join(instance_dir, 'meta.json'), 'w') as f:
             json.dump({
-                "input_filename": f'input{ext}',
+                "raw_filenames": saved_files,
+                "input_filename": "joined_input.mp4",
                 "dec_option": "auto",
                 "custom_dec": ""
             }, f)
 
-        flash("Video successfully uploaded. Ready for Smash Analysis.", "success")
+        flash(f"{len(saved_files)} videos successfully uploaded. Ready for Analysis.", "success")
         return redirect(url_for('detail_analysis', instance_id=instance_id))
 
     return render_template_string(NEW_HTML)
@@ -553,20 +582,53 @@ def analyze_smashes(instance_id):
     try:
         meta_path = os.path.join(instance_dir, 'meta.json')
         meta = json.load(open(meta_path))
-        input_video_path = os.path.join(instance_dir, meta['input_filename'])
 
-        # Run Phase 1 Processing (Extraction & Detection)
-        metrics, fps = extract_kinematic_metrics(input_video_path)
-        smashes = find_smashes(metrics, fps)
+        all_metrics = []
+        all_smashes = []
+        frame_offset = 0
+        global_fps = 120
 
-        # Plotting is now fully decoupled from Assessment generation
-        plot_smashes_kinematics(metrics, fps, smashes, output_dir=instance_dir)
+        # 1. Process each clip entirely in isolation
+        for raw_file in meta['raw_filenames']:
+            clip_path = os.path.join(instance_dir, raw_file)
+            clip_metrics, fps = extract_kinematic_metrics(clip_path)
+            global_fps = fps
 
-        save_kinematics_json(metrics, os.path.join(instance_dir, 'kinematics.json'))
-        save_json(os.path.join(instance_dir, 'smashes.json'), smashes)
+            clip_smashes = find_smashes(clip_metrics, fps)
 
-        # Update meta with extracted FPS
-        meta['fps'] = fps
+            # Translate local frame indices into the global continuous timeline
+            for s in clip_smashes:
+                s.start_frame_idx += frame_offset
+                s.end_frame_idx += frame_offset
+                s.peak_frame_idx += frame_offset
+                s.critical_end_frame_idx += frame_offset
+                s.overhead_start_frame_idx += frame_offset
+                s.overhead_end_frame_idx += frame_offset
+
+                # Recalculate formatted time strings based on global timeline
+                s.start_time_str = _format_timestamp(s.start_frame_idx, fps)
+                s.end_time_str = _format_timestamp(s.end_frame_idx, fps)
+                s.peak_time_str = _format_timestamp(s.peak_frame_idx, fps)
+                s.critical_end_time_str = _format_timestamp(s.critical_end_frame_idx, fps)
+                s.overhead_start_time_str = _format_timestamp(s.overhead_start_frame_idx, fps)
+                s.overhead_end_time_str = _format_timestamp(s.overhead_end_frame_idx, fps)
+
+                all_smashes.append(s)
+
+            all_metrics.extend(clip_metrics)
+            frame_offset += len(clip_metrics)
+
+        # 2. Concatenate raw videos for UI playback and future overlay generation
+        joined_path = os.path.join(instance_dir, meta['input_filename'])
+        raw_paths = [os.path.join(instance_dir, f) for f in meta['raw_filenames']]
+        _concatenate_videos(raw_paths, joined_path)
+
+        # 3. Output results
+        plot_smashes_kinematics(all_metrics, global_fps, all_smashes, output_dir=instance_dir)
+        save_kinematics_json(all_metrics, os.path.join(instance_dir, 'kinematics.json'))
+        save_json(os.path.join(instance_dir, 'smashes.json'), all_smashes)
+
+        meta['fps'] = global_fps
         with open(meta_path, 'w') as f:
             json.dump(meta, f)
 
