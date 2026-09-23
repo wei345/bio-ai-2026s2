@@ -23,7 +23,7 @@ assessments = sa.assess_smashes(kin_metrics=kin_metrics,
                max_critical_deceleration=max_critical_dec)
 
 # %%
-sa.plot_smash_validation(kin_metrics, fps,
+sa.plot_smashes_kinematics(kin_metrics, fps,
                          smashes=smashes,
                          assessments=assessments,
                          fig_name=output_kin_image)

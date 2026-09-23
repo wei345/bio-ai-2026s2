@@ -225,7 +225,7 @@ def find_smashes(kin_metrics: list[FrameMetrics],
                  critical_deceleration_window_ms: int = 50) -> list[SmashEvent]:
     """
     Identifies badminton smashes by finding swing blocks where the grip is above the head,
-    locating the peak upper-arm angular velocity within that block, verifying the drop-through time,
+    locating the peak grip velocity within that block, verifying the drop-through time,
     and extracting critical deceleration metrics anchored to that kinematic peak.
     """
     smashes = []
@@ -263,15 +263,15 @@ def find_smashes(kin_metrics: list[FrameMetrics],
     # 2. Filter blocks and extract metrics based on the true kinematic peak
     for start_idx, end_idx in swing_blocks:
 
-        # Find the peak angular velocity (omega_peak_idx) within this specific swing block
-        max_omega = -float('inf')
-        omega_peak_idx = start_idx
+        # Find the peak grip speed (peak_idx) within this specific swing block
+        max_grip_speed = -float('inf')
+        peak_idx = start_idx
         for j in range(start_idx, end_idx):
-            if kin_metrics[j].upper_arm_angular_speed > max_omega:
-                max_omega = kin_metrics[j].upper_arm_angular_speed
-                omega_peak_idx = j
+            if kin_metrics[j].grip_speed > max_grip_speed:
+                max_grip_speed = kin_metrics[j].grip_speed
+                peak_idx = j
 
-        peak_time_sec = omega_peak_idx / fps
+        peak_time_sec = peak_idx / fps
 
         # Apply inclusion/exclusion time filters relative to the kinematic peak
         if time_spans_included:
@@ -282,27 +282,26 @@ def find_smashes(kin_metrics: list[FrameMetrics],
                 continue
 
         # Verify the smash wasn't a slow clear/drop by checking max returning time
-        # (end_idx is the exact frame the racket dropped below the head)
-        frames_to_return = end_idx - omega_peak_idx
+        frames_to_return = end_idx - peak_idx
         if frames_to_return > max_ret_frames:
             continue
 
         # Calculate average deceleration within the critical window
-        dec_start = omega_peak_idx
-        dec_end = min(len(kin_metrics), omega_peak_idx + crit_dec_frames)
+        dec_start = peak_idx
+        dec_end = min(len(kin_metrics), peak_idx + crit_dec_frames)
 
         if dec_end > dec_start:
             avg_dec = sum(kin_metrics[j].upper_arm_angular_deceleration for j in range(dec_start, dec_end)) / (dec_end - dec_start)
         else:
             avg_dec = 0.0
 
-        # Construct the final event boundaries anchored directly to the angular velocity peak
-        s_start = max(0, omega_peak_idx - pre_frames)
-        s_end = min(len(kin_metrics), omega_peak_idx + post_frames)
+        # Construct the final event boundaries anchored directly to the kinematic peak
+        s_start = max(0, peak_idx - pre_frames)
+        s_end = min(len(kin_metrics), peak_idx + post_frames)
 
         smashes.append(SmashEvent(
-            peak_frame_idx=omega_peak_idx,
-            peak_time_str=_format_timestamp(omega_peak_idx, fps),
+            peak_frame_idx=peak_idx,
+            peak_time_str=_format_timestamp(peak_idx, fps),
             critical_end_frame_idx=dec_end,
             critical_end_time_str=_format_timestamp(dec_end, fps),
             start_frame_idx=s_start,
@@ -474,131 +473,85 @@ def assess_smashes(kin_metrics: list[FrameMetrics],
 
 # region Visualization:Graph
 # %%
-def plot_smash_validation(metrics: list[FrameMetrics], fps: float,
-                          smashes: list[SmashEvent] | None = None,
-                          assessments: list[SmashAssessment] | None = None,
-                          save_fig=True, fig_name=None):
+def plot_smashes_kinematics(metrics: list[FrameMetrics], fps: float,
+                            smashes: list[SmashEvent],
+                            output_dir: str):
     """
-    Generates a 3-panel plot to visually validate proximal-to-distal sequencing,
-    upper-arm deceleration, and grip height relative to the head.
-
-    Includes visual overlays for smash regions, sequence/amplification risk levels,
-    critical deceleration thresholds, and exact critical window boundaries.
+    Generates a 3-panel plot for EACH smash individually to prevent data compression.
+    The timeline is dynamically sliced to [smash.start - 0.25s, smash.end + 0.25s].
     """
-    times = np.arange(len(metrics)) / fps
+    buffer_frames = int(0.25 * fps)
 
-    # Extract data
-    trunk_v = [m.trunk_speed for m in metrics]
-    shoulder_v = [m.shoulder_speed for m in metrics]
-    elbow_v = [m.elbow_speed for m in metrics]
-    wrist_v = [m.wrist_speed for m in metrics]
-    grip_v = [m.grip_speed for m in metrics]
+    for i, smash in enumerate(smashes):
+        # Calculate strict frame boundaries for this specific smash plot
+        start_idx = max(0, smash.start_frame_idx - buffer_frames)
+        end_idx = min(len(metrics), smash.end_frame_idx + buffer_frames)
 
-    ang_accel = [m.upper_arm_angular_deceleration for m in metrics]
+        sliced_metrics = metrics[start_idx:end_idx]
+        times = np.arange(start_idx, end_idx) / fps
 
-    # Extract Y-coordinates (None-safe).
-    grip_y = [m.grip_coord[1] if m.grip_coord else np.nan for m in metrics]
-    head_y = [m.head_coord[1] if m.head_coord else np.nan for m in metrics]
+        # Extract data for the sliced window
+        trunk_v = [m.trunk_speed for m in sliced_metrics]
+        shoulder_v = [m.shoulder_speed for m in sliced_metrics]
+        elbow_v = [m.elbow_speed for m in sliced_metrics]
+        wrist_v = [m.wrist_speed for m in sliced_metrics]
+        grip_v = [m.grip_speed for m in sliced_metrics]
 
-    # Create a 3-panel subplot sharing the X (Time) axis
-    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 10), sharex=True)
-    fig.suptitle('Kinematic Validation of Badminton Smash', fontsize=16, fontweight='bold')
+        ang_accel = [m.upper_arm_angular_deceleration for m in sliced_metrics]
+        grip_y = [m.grip_coord[1] if m.grip_coord else np.nan for m in sliced_metrics]
+        head_y = [m.head_coord[1] if m.head_coord else np.nan for m in sliced_metrics]
 
-    # --- Panel 1: Linear Speeds (Check Sequence & Amplification) ---
-    ax1.plot(times, trunk_v, label='Trunk', color='green', linewidth=1.5)
-    ax1.plot(times, elbow_v, label='Upper Arm', color='blue', linewidth=1.5)
-    ax1.plot(times, wrist_v, label='Forearm', color='orange', linewidth=1.5)
-    ax1.plot(times, grip_v, label='Grip', color='red', linewidth=2)
-    ax1.set_ylabel('Speed (px/s)')
-    ax1.set_title('Proximal-to-Distal Kinetic Chain & Velocity Amplification')
-    ax1.grid(True, linestyle='--', alpha=0.6)
+        fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 10), sharex=True)
+        fig.suptitle(f'Kinematic Plot: Smash {i+1}', fontsize=16, fontweight='bold')
 
-    # --- Panel 2: Upper Arm Angular Deceleration ---
-    ax2.plot(times, ang_accel, label='Upper Arm Ang Accel/Decel', color='orange', linewidth=2)
-    ax2.axhline(0, color='black', linestyle='-', linewidth=1)
-    ax2.fill_between(times, 0, ang_accel, where=(np.array(ang_accel) < 0), color='red', alpha=0.3, label='Deceleration Phase')
-    ax2.set_ylabel('Acceleration (deg/s²)')
-    ax2.set_title('Upper Arm Angular Deceleration Profile')
-    ax2.grid(True, linestyle='--', alpha=0.6)
+        # --- Panel 1: Linear Speeds ---
+        ax1.plot(times, trunk_v, label='Trunk', color='green', linewidth=1.5)
+        ax1.plot(times, elbow_v, label='Upper Arm', color='blue', linewidth=1.5)
+        ax1.plot(times, wrist_v, label='Forearm', color='orange', linewidth=1.5)
+        ax1.plot(times, grip_v, label='Grip', color='red', linewidth=2)
+        ax1.set_ylabel('Speed (px/s)')
+        ax1.set_title('Proximal-to-Distal Kinetic Chain & Velocity Amplification')
+        ax1.grid(True, linestyle='--', alpha=0.6)
 
-    # --- Panel 3: Position Validation (Grip above Head) ---
-    ax3.plot(times, grip_y, label='Grip Level', color='red', linewidth=2)
-    ax3.plot(times, head_y, label='Head Level', color='blue', linestyle='--', linewidth=2)
-    ax3.invert_yaxis() # Invert Y-axis so visually "higher" means physically higher on screen
-    ax3.set_ylabel('Vertical Position (px)')
-    ax3.set_xlabel('Time (seconds)')
-    ax3.set_title('Stroke Elevation (Grip vs Head)')
-    ax3.grid(True, linestyle='--', alpha=0.6)
+        # --- Panel 2: Upper Arm Angular Deceleration ---
+        ax2.plot(times, ang_accel, label='Upper Arm Ang Accel/Decel', color='orange', linewidth=2)
+        ax2.axhline(0, color='black', linestyle='-', linewidth=1)
+        ax2.fill_between(times, 0, ang_accel, where=(np.array(ang_accel) < 0), color='red', alpha=0.3, label='Deceleration Phase')
+        ax2.set_ylabel('Acceleration (deg/s²)')
+        ax2.set_title('Upper Arm Angular Deceleration Profile')
+        ax2.grid(True, linestyle='--', alpha=0.6)
 
-    # --- Overlay Smash Regions, Critical Windows & Risk Assessments ---
-    if smashes:
-        for i, smash in enumerate(smashes):
-            start_t = smash.start_frame_idx / fps
-            end_t = smash.end_frame_idx / fps
-            peak_t = smash.peak_frame_idx / fps
-            crit_end_t = smash.critical_end_frame_idx / fps
+        # --- Panel 3: Position Validation ---
+        ax3.plot(times, grip_y, label='Grip Level', color='red', linewidth=2)
+        ax3.plot(times, head_y, label='Head Level', color='blue', linestyle='--', linewidth=2)
+        ax3.invert_yaxis()
+        ax3.set_ylabel('Vertical Position (px)')
+        ax3.set_xlabel('Time (seconds)')
+        ax3.set_title('Stroke Elevation (Grip vs Head)')
+        ax3.grid(True, linestyle='--', alpha=0.6)
 
-            # Prevent duplicate legend entries by only labeling the first smash
-            lbl_peak = 'Kinematic Peak' if i == 0 else ""
-            lbl_crit = 'Crit. Window End' if i == 0 else ""
+        # Draw regions and boundary lines relative to the actual video timeline
+        start_t = smash.start_frame_idx / fps
+        end_t = smash.end_frame_idx / fps
+        peak_t = smash.peak_frame_idx / fps
+        crit_end_t = smash.critical_end_frame_idx / fps
 
-            # Shade smash regions and draw boundary lines across all panels
-            for ax in (ax1, ax2, ax3):
-                # Full smash duration background
-                ax.axvspan(start_t, end_t, color='gray', alpha=0.15, zorder=0)
+        for ax in (ax1, ax2, ax3):
+            ax.axvspan(start_t, end_t, color='gray', alpha=0.15, zorder=0)
+            ax.axvspan(peak_t, crit_end_t, color='red', alpha=0.15, zorder=0)
+            ax.axvline(x=peak_t, color='black', linestyle='--', linewidth=1.5, alpha=0.8, label='Kinematic Peak')
+            ax.axvline(x=crit_end_t, color='darkred', linestyle=':', linewidth=1.5, alpha=0.8, label='Crit. Window End')
 
-                # Highlight the specific 50ms Critical Deceleration Window
-                ax.axvspan(peak_t, crit_end_t, color='red', alpha=0.15, zorder=0)
+        ax1.legend(loc='upper right')
+        ax2.legend(loc='upper right')
+        ax3.legend(loc='upper right')
 
-                # Draw vertical markers for peak and critical end
-                ax.axvline(x=peak_t, color='black', linestyle='--', linewidth=1.5, alpha=0.8, label=lbl_peak)
-                ax.axvline(x=crit_end_t, color='darkred', linestyle=':', linewidth=1.5, alpha=0.8, label=lbl_crit)
+        plt.tight_layout()
 
-            # Mark assessment risks if provided
-            if assessments and i < len(assessments):
-                a = assessments[i]
-
-                def get_risk_ui(risk_enum):
-                    if risk_enum == 0: return 'green', 'Low'
-                    if risk_enum == 1: return 'goldenrod', 'Mod'
-                    return 'red', 'High'
-
-                pd_color, pd_label = get_risk_ui(a.p_d_sequence_risk)
-                amp_color, amp_label = get_risk_ui(a.velocity_amplification_risk)
-                dec_color, dec_label = get_risk_ui(a.critical_deceleration_risk)
-
-                # Panel 1: Annotate Sequence and Amplification Risk
-                ax1_text = f"Smash {i+1}\nP-D Seq: {pd_label}\nV-Amp: {amp_label}"
-                ax1.text(peak_t, 0.95, ax1_text, transform=ax1.get_xaxis_transform(),
-                         ha='center', va='top', fontsize=9, zorder=10,
-                         bbox=dict(facecolor='white', alpha=0.85, edgecolor='gray', boxstyle='round,pad=0.3'))
-
-                # Panel 2: Draw Critical Deceleration Line & Risk
-                ax2.hlines(y=a.critical_deceleration, xmin=peak_t, xmax=crit_end_t,
-                           color=dec_color, linestyle='-', linewidth=2, zorder=5)
-
-                ax2_text = f"Crit Decel: {abs(a.critical_deceleration):.0f}\nRisk: {dec_label}"
-                ax2.text(crit_end_t, 0.05, ax2_text, transform=ax2.get_xaxis_transform(),
-                         ha='left', va='bottom', fontsize=9, color=dec_color, fontweight='bold', zorder=10,
-                         bbox=dict(facecolor='white', alpha=0.85, edgecolor=dec_color, boxstyle='round,pad=0.3'))
-
-    # Render legends
-    ax1.legend(loc='upper right')
-    ax2.legend(loc='upper right')
-    ax3.legend(loc='upper right')
-
-    plt.tight_layout()
-
-    if save_fig:
-        if fig_name is None:
-            title = fig.get_suptitle()
-            clean_title = title.lower().replace(' ', '-').replace('(', '').replace(')', '').replace(':', '')
-            fig_name = f"{clean_title}.png"
+        # Save individual file per smash
+        fig_name = os.path.join(output_dir, f'kinematic_plot_{i}.png')
         plt.savefig(fig_name, dpi=300, bbox_inches='tight')
-        print(f"Figure saved as {fig_name}")
-
-    if 'HEADLESS_MODE' not in os.environ:
-        plt.show()
+        plt.close(fig) # Free memory for the web server
 # endregion
 
 # region Visualization: Overlaying Video
