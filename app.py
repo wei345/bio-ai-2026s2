@@ -273,7 +273,23 @@ NEW_HTML = HTML_TOP + """
 DETAIL_HTML = HTML_TOP + """
 <div class="d-flex justify-content-between align-items-center mb-4">
     <h2>Analysis: {{ instance_id }}</h2>
-    <a href="/analyses" class="btn btn-outline-secondary btn-sm">Back to List</a>
+    <div>
+        <a href="/analyses" class="btn btn-outline-secondary btn-sm me-2">Back to List</a>
+        <form action="/analyses/{{ instance_id }}/delete" method="POST" class="d-inline">
+            <button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('Delete this instance forever?');">Delete</button>
+        </form>
+    </div>
+</div>
+
+<!-- Editable Note Section -->
+<div class="card shadow-sm mb-4">
+    <div class="card-body py-2">
+        <form action="/analyses/{{ instance_id }}/note" method="POST" class="d-flex align-items-center m-0">
+            <label class="form-label me-3 mb-0 fw-bold text-muted">Note:</label>
+            <input type="text" class="form-control me-3 bg-light" name="note" value="{{ note }}" placeholder="Add a description for this analysis...">
+            <button type="submit" class="btn btn-outline-primary btn-sm px-4">Save</button>
+        </form>
+    </div>
 </div>
 
 <div class="row">
@@ -415,7 +431,9 @@ DETAIL_HTML = HTML_TOP + """
                         {% else %}
                             <td class="align-middle text-muted">-</td>
                             <td class="align-middle text-muted">-</td>
-                            <td class="align-middle text-muted">-</td>
+                            <td class="align-middle text-muted">
+                                {{ s.critical_deceleration|abs|round|int }}
+                            </td>
                             <td class="align-middle d-flex justify-content-between align-items-center">
                                 <span class="badge bg-secondary">Pending</span>
                                 <!-- Double Chevron SVG mapping to the row collapse state -->
@@ -632,9 +650,15 @@ def detail_analysis(instance_id):
 
     # Render GET View
     assessments = load_json(os.path.join(instance_dir, 'assessments.json'), SmashAssessment)
+
+    # Read the current note
+    note_path = os.path.join(instance_dir, 'note.txt')
+    current_note = open(note_path).read() if os.path.exists(note_path) else ""
+
     return render_template_string(
         DETAIL_HTML,
         instance_id=instance_id,
+        note=current_note,
         input_filename=meta.get('input_filename'),
         fps=fps,
         auto_max_dec=auto_max_dec,
@@ -645,6 +669,20 @@ def detail_analysis(instance_id):
         has_assessment=(assessments is not None),
         assessments=assessments or []
     )
+
+@app.route('/analyses/<instance_id>/note', methods=['POST'])
+def update_note(instance_id):
+    instance_dir = os.path.join(ANALYSES_DIR, instance_id)
+    if not os.path.exists(instance_dir):
+        flash("Analysis not found.", "error")
+        return redirect(url_for('list_analyses'))
+
+    new_note = request.form.get('note', '')
+    with open(os.path.join(instance_dir, 'note.txt'), 'w') as f:
+        f.write(new_note)
+
+    flash("Note updated.", "success")
+    return redirect(url_for('detail_analysis', instance_id=instance_id))
 
 # Static file serving for the generated outputs
 @app.route('/analyses/<instance_id>/<filename>')
