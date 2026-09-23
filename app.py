@@ -143,6 +143,9 @@ HTML_BOTTOM = """
                 event.preventDefault();
             }
 
+            // Ensure assessment tables are shown
+            timeInSeconds = timeInSeconds + 0.01
+
             var vOrig = document.getElementById('origVideo');
             var vOver = document.getElementById('overlayVideo');
             
