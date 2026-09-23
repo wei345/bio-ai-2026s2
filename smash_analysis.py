@@ -24,6 +24,8 @@ from dataclasses import dataclass
 from typing import Optional, Tuple
 from enum import IntEnum
 from typing import List
+from scipy.signal import savgol_filter
+from scipy.ndimage import median_filter
 # endregion
 
 # region Kinematic Metrics Extraction
@@ -190,6 +192,43 @@ def extract_kinematic_metrics(
     cap.release()
     pose.close()
 
+    # ---------------------------------------------------------
+    # Post-Processing: Outlier Rejection & Kinematic Smoothing
+    # ---------------------------------------------------------
+    # Applied to remove impossible human 50ms deceleration V-dips
+    # caused by 2D camera foreshortening and tracking artifacts.
+    if len(metrics) > 11:
+        window_len = 11
+        poly_order = 3
+        med_size = 5 # Median filter size for spike removal
+
+        def smooth_trajectory(data, is_speed=True):
+            # Step 1: Reject sudden outlier dips/spikes
+            despiked = median_filter(data, size=med_size)
+            # Step 2: Smooth the continuous trajectory
+            smoothed = savgol_filter(despiked, window_len, poly_order)
+            if is_speed:
+                smoothed = np.maximum(smoothed, 0.0) # Speed cannot be negative
+            return smoothed
+
+        trunk_s = smooth_trajectory([m.trunk_speed for m in metrics])
+        shoulder_s = smooth_trajectory([m.shoulder_speed for m in metrics])
+        elbow_s = smooth_trajectory([m.elbow_speed for m in metrics])
+        wrist_s = smooth_trajectory([m.wrist_speed for m in metrics])
+        grip_s = smooth_trajectory([m.grip_speed for m in metrics])
+
+        ang_s = smooth_trajectory([m.upper_arm_angular_speed for m in metrics], is_speed=False)
+        ang_a = smooth_trajectory([m.upper_arm_angular_deceleration for m in metrics], is_speed=False)
+
+        for i, m in enumerate(metrics):
+            m.trunk_speed = float(trunk_s[i])
+            m.shoulder_speed = float(shoulder_s[i])
+            m.elbow_speed = float(elbow_s[i])
+            m.wrist_speed = float(wrist_s[i])
+            m.grip_speed = float(grip_s[i])
+            m.upper_arm_angular_speed = float(ang_s[i])
+            m.upper_arm_angular_deceleration = float(ang_a[i])
+
     return metrics, fps
 # endregion
 
@@ -205,6 +244,10 @@ class SmashEvent:
     start_time_str: str
     end_frame_idx: int
     end_time_str: str
+    overhead_start_frame_idx: int
+    overhead_start_time_str: str
+    overhead_end_frame_idx: int
+    overhead_end_time_str: str
     critical_deceleration: float
 
 def _format_timestamp(frame_idx: int, fps: float) -> str:
@@ -222,48 +265,48 @@ def find_smashes(kin_metrics: list[FrameMetrics],
                  max_returning_time_ms: int = 500,
                  pre_smash_buffer_ms: int = 500,
                  post_smash_buffer_ms: int = 300,
-                 critical_deceleration_window_ms: int = 50) -> list[SmashEvent]:
+                 critical_deceleration_window_ms: int = 50,
+                 min_overhead_time_ms: int = 50) -> list[SmashEvent]:
     """
-    Identifies badminton smashes by finding swing blocks where the grip is above the head,
-    locating the peak grip velocity within that block, verifying the drop-through time,
-    and extracting critical deceleration metrics anchored to that kinematic peak.
+    Identifies badminton smashes by finding overhead swing blocks lasting at least min_overhead_time_ms,
+    locating the peak grip velocity, and extracting critical deceleration metrics.
     """
     smashes = []
 
-    # Convert temporal milliseconds to frame counts
     pre_frames = int((pre_smash_buffer_ms / 1000.0) * fps)
     post_frames = int((post_smash_buffer_ms / 1000.0) * fps)
     crit_dec_frames = max(1, int((critical_deceleration_window_ms / 1000.0) * fps))
     max_ret_frames = int((max_returning_time_ms / 1000.0) * fps)
+    min_overhead_frames = max(1, int((min_overhead_time_ms / 1000.0) * fps))
 
     swing_blocks = []
     in_swing = False
     start_idx = 0
 
-    # 1. Identify all over-head swing blocks to define our search windows
+    # 1. Identify all overhead swing blocks meeting the minimum duration
     for i, m in enumerate(kin_metrics):
         if m.grip_coord and m.head_coord:
             grip_y = m.grip_coord[1]
             head_y = m.head_coord[1]
 
-            if grip_y < head_y: # Grip is physically higher than the head
+            if grip_y < head_y:  # Grip is physically higher than the head
                 if not in_swing:
                     in_swing = True
                     start_idx = i
-            else: # Grip dropped below the head
+            else:  # Grip dropped below the head
                 if in_swing:
                     end_idx = i
-                    swing_blocks.append((start_idx, end_idx))
+                    if (end_idx - start_idx) >= min_overhead_frames:
+                        swing_blocks.append((start_idx, end_idx))
                     in_swing = False
 
-    # Handle case where the video ends while still in an overhead swing
     if in_swing:
-        swing_blocks.append((start_idx, len(kin_metrics)))
+        end_idx = len(kin_metrics)
+        if (end_idx - start_idx) >= min_overhead_frames:
+            swing_blocks.append((start_idx, end_idx))
 
-    # 2. Filter blocks and extract metrics based on the true kinematic peak
+    # 2. Filter blocks and extract metrics anchored to the kinematic peak
     for start_idx, end_idx in swing_blocks:
-
-        # Find the peak grip speed (peak_idx) within this specific swing block
         max_grip_speed = -float('inf')
         peak_idx = start_idx
         for j in range(start_idx, end_idx):
@@ -273,7 +316,6 @@ def find_smashes(kin_metrics: list[FrameMetrics],
 
         peak_time_sec = peak_idx / fps
 
-        # Apply inclusion/exclusion time filters relative to the kinematic peak
         if time_spans_included:
             if not any(start <= peak_time_sec <= end for start, end in time_spans_included):
                 continue
@@ -281,12 +323,10 @@ def find_smashes(kin_metrics: list[FrameMetrics],
             if any(start <= peak_time_sec <= end for start, end in time_spans_excluded):
                 continue
 
-        # Verify the smash wasn't a slow clear/drop by checking max returning time
         frames_to_return = end_idx - peak_idx
         if frames_to_return > max_ret_frames:
             continue
 
-        # Calculate average deceleration within the critical window
         dec_start = peak_idx
         dec_end = min(len(kin_metrics), peak_idx + crit_dec_frames)
 
@@ -295,7 +335,6 @@ def find_smashes(kin_metrics: list[FrameMetrics],
         else:
             avg_dec = 0.0
 
-        # Construct the final event boundaries anchored directly to the kinematic peak
         s_start = max(0, peak_idx - pre_frames)
         s_end = min(len(kin_metrics), peak_idx + post_frames)
 
@@ -308,6 +347,10 @@ def find_smashes(kin_metrics: list[FrameMetrics],
             start_time_str=_format_timestamp(s_start, fps),
             end_frame_idx=s_end,
             end_time_str=_format_timestamp(s_end, fps),
+            overhead_start_frame_idx=start_idx,
+            overhead_start_time_str=_format_timestamp(start_idx, fps),
+            overhead_end_frame_idx=end_idx,
+            overhead_end_time_str=_format_timestamp(end_idx, fps),
             critical_deceleration=avg_dec
         ))
 

@@ -36,6 +36,15 @@ def save_json(filepath, data):
     with open(filepath, 'w') as f:
         json.dump(data, f, cls=KinematicsEncoder, indent=2)
 
+def save_kinematics_json(metrics: list[FrameMetrics], output_path: str):
+    """Serializes frame metrics into JSON with exactly one frame object per line."""
+    frame_dicts = [asdict(m) for m in metrics]
+    formatted_lines = [json.dumps(d) for d in frame_dicts]
+    json_content = "[\n" + ",\n".join(formatted_lines) + "\n]"
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(json_content)
+
 def load_json(filepath, cls):
     if not os.path.exists(filepath):
         return None
@@ -44,6 +53,29 @@ def load_json(filepath, cls):
     if isinstance(data, list):
         return [cls(**item) for item in data]
     return cls(**data)
+# endregion
+
+# region Concurrency Locking
+class ProcessingLock:
+    """Atomic file-based lock to prevent duplicated concurrent processing on the same instance."""
+    def __init__(self, instance_dir):
+        self.lock_file = os.path.join(instance_dir, '.processing_lock')
+
+    def acquire(self):
+        try:
+            # os.O_EXCL ensures this raises FileExistsError if the lock file already exists
+            fd = os.open(self.lock_file, os.O_CREAT | os.O_EXCL | os.O_RDWR)
+            os.close(fd)
+            return True
+        except FileExistsError:
+            return False
+
+    def release(self):
+        if os.path.exists(self.lock_file):
+            try:
+                os.remove(self.lock_file)
+            except OSError:
+                pass
 # endregion
 
 # Register the function globally so Jinja can use it in the HTML templates
@@ -103,7 +135,14 @@ HTML_BOTTOM = """
             });
         });
 
-        function seekVideo(timeInSeconds) {
+        function seekVideo(event, timeInSeconds) {
+            // Stop click event from bubbling up to the table row and toggling the plot
+            // THIS DOES NOT WORK!
+            if (event) {
+                event.stopPropagation();
+                event.preventDefault();
+            }
+
             var vOrig = document.getElementById('origVideo');
             var vOver = document.getElementById('overlayVideo');
             
@@ -120,13 +159,14 @@ HTML_BOTTOM = """
             }
             
             // Scroll the video container smoothly into view
-            // var container = document.getElementById('videoContainer');
+            var container = document.getElementById('videoContainer');
             // if(container) {
             //     container.scrollIntoView({ behavior: 'smooth', block: 'center' });
             // }
         }
         
-        
+        // Stop click event from bubbling up to the table row and toggling the plot
+        // THIS WORKS! DO NOT DELETE THIS.
         // Listen globally for Bootstrap trying to show or hide the collapse panel
         document.addEventListener('show.bs.collapse', function (event) {
             // Check if the element that triggered the click has 'seekVideo' in its onclick
@@ -144,7 +184,6 @@ HTML_BOTTOM = """
                 event.preventDefault();
             }
         });
-
     </script>
 </body>
 </html>
@@ -238,8 +277,8 @@ DETAIL_HTML = HTML_TOP + """
     
     <!-- Left Column: Smash Analysis Processing Panel -->
     <div class="col-md-6 mb-4">
-        <div class="card shadow-sm h-100 border-info"> <!-- Added h-100 to equalize heights -->
-            <div class="card-body d-flex flex-column justify-content-between"> <!-- Flexbox alignment -->
+        <div class="card shadow-sm h-100 border-info">
+            <div class="card-body d-flex flex-column justify-content-between">
                 <div>
                     <h5 class="card-title">Smash Analysis</h5>
                     <p class="text-muted small mb-0">Extract kinematics and identify smash timeframes.</p>
@@ -251,7 +290,7 @@ DETAIL_HTML = HTML_TOP + """
                 </form>
                 {% else %}
                 <div class="mt-3 mb-0 py-2">
-                    Found <strong>{{ smashes|length }}</strong> smashes.
+                    Found <strong>{{ smashes|length }}</strong> smashes. Plots are ready to view.
                 </div>
                 {% endif %}
             </div>
@@ -265,7 +304,6 @@ DETAIL_HTML = HTML_TOP + """
                 <h5 class="card-title">Run Injury Risk Assessment</h5>
                 <form action="/analyses/{{ instance_id }}" method="POST" class="row g-3 align-items-end" onsubmit="document.getElementById('assessBtn').disabled=true; document.getElementById('assessBtn').innerHTML='Processing...'; return true;">
                     
-                    <!-- Expanded from col-md-7 to col-md-9 to make the input row much longer -->
                     <div class="col-md-12">
                         <label class="form-label">Max Critical Deceleration (deg/s²)</label>
                         <div class="input-group">
@@ -277,7 +315,6 @@ DETAIL_HTML = HTML_TOP + """
                                 <input class="form-check-input mt-0" type="radio" name="dec_option" value="custom" {% if saved_dec_option == 'custom' %}checked{% endif %} {% if not has_analysis %}disabled{% endif %}>
                                 <span class="ms-2">Custom</span>
                             </div>
-                            <!-- This input now has maximum horizontal space to expand into -->
                             <input type="number" class="form-control" name="custom_dec" value="{{ saved_custom_dec }}" placeholder="e.g. 15000" {% if not has_analysis %}disabled{% endif %}>
                         </div>
                     </div>
@@ -293,9 +330,7 @@ DETAIL_HTML = HTML_TOP + """
         </div>
     </div>
 
-
 </div>
-
 
 {% if has_analysis %}
 <!-- Primary Video Panel -->
@@ -342,23 +377,24 @@ DETAIL_HTML = HTML_TOP + """
                 </thead>
                 <tbody>
                     {% for s in smashes %}
-                    <tr {% if has_assessment %}class="row-toggle" data-bs-toggle="collapse" data-bs-target="#plot-{{ loop.index }}" aria-expanded="false"{% endif %}>
+                    <!-- Row is always expandable as long as analysis is done -->
+                    <tr class="row-toggle" data-bs-toggle="collapse" data-bs-target="#plot-{{ loop.index }}" aria-expanded="false">
                         <td class="align-middle">{{ loop.index }}</td>
                         <td class="align-middle">
-                            <a href="javascript:void(0);" onclick="seekVideo({{ s.start_frame_idx / fps }})" class="video-seeker text-decoration-none fw-bold" title="Click to view in video">
+                            <a href="#" onclick="seekVideo(event, {{ s.start_frame_idx / fps }})" class="video-seeker text-decoration-none fw-bold" title="Click to view in video">
                                 {{ s.start_time_str[:5] }} - {{ s.end_time_str[:5] }}
                             </a>
                         </td>
                         
                         {% if has_assessment %}
                             {% set a = assessments[loop.index0] %}
-                            <td class="align-middle {% if a.p_d_sequence_risk == 0 %}{% elif a.p_d_sequence_risk == 1 %}text-warning{% else %}text-danger{% endif %}">
+                            <td class="align-middle {% if a.p_d_sequence_risk == 0 %}text-success{% elif a.p_d_sequence_risk == 1 %}text-warning{% else %}text-danger{% endif %}">
                                 {{ format_sequence(a.p_d_sequence) }}
                             </td>
-                            <td class="align-middle {% if a.velocity_amplification_risk == 0 %}{% elif a.velocity_amplification_risk == 1 %}text-warning{% else %}text-danger{% endif %}">
+                            <td class="align-middle {% if a.velocity_amplification_risk == 0 %}text-success{% elif a.velocity_amplification_risk == 1 %}text-warning{% else %}text-danger{% endif %}">
                                 {{ format_sequence(a.velocity_amplification) }}
                             </td>
-                            <td class="align-middle {% if a.critical_deceleration_risk == 0 %}{% elif a.critical_deceleration_risk == 1 %}text-warning{% else %}text-danger{% endif %}">
+                            <td class="align-middle {% if a.critical_deceleration_risk == 0 %}text-success{% elif a.critical_deceleration_risk == 1 %}text-warning{% else %}text-danger{% endif %}">
                                 {{ a.critical_deceleration|abs|round|int }}
                             </td>
                             <td class="align-middle d-flex justify-content-between align-items-center">
@@ -377,11 +413,18 @@ DETAIL_HTML = HTML_TOP + """
                             <td class="align-middle text-muted">-</td>
                             <td class="align-middle text-muted">-</td>
                             <td class="align-middle text-muted">-</td>
-                            <td class="align-middle"><span class="badge bg-secondary">Pending</span></td>
+                            <td class="align-middle d-flex justify-content-between align-items-center">
+                                <span class="badge bg-secondary">Pending</span>
+                                <!-- Double Chevron SVG mapping to the row collapse state -->
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="toggle-icon text-muted ms-2" viewBox="0 0 16 16">
+                                    <path fill-rule="evenodd" d="M1.646 6.646a.5.5 0 0 1 .708 0L8 12.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708z"/>
+                                    <path fill-rule="evenodd" d="M1.646 2.646a.5.5 0 0 1 .708 0L8 8.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708z"/>
+                                </svg>
+                            </td>
                         {% endif %}
                     </tr>
                     
-                    {% if has_assessment %}
+                    <!-- Plot is drawn unconditionally if analysis finished -->
                     <tr class="collapse" id="plot-{{ loop.index }}">
                         <td colspan="6" class="p-0 bg-light text-center border-bottom">
                             <div class="p-3">
@@ -391,7 +434,6 @@ DETAIL_HTML = HTML_TOP + """
                             </div>
                         </td>
                     </tr>
-                    {% endif %}
                     {% endfor %}
                 </tbody>
             </table>
@@ -482,16 +524,24 @@ def analyze_smashes(instance_id):
         flash("Analysis not found.", "error")
         return redirect(url_for('list_analyses'))
 
-    meta_path = os.path.join(instance_dir, 'meta.json')
-    meta = json.load(open(meta_path))
-    input_video_path = os.path.join(instance_dir, meta['input_filename'])
+    lock = ProcessingLock(instance_dir)
+    if not lock.acquire():
+        flash("This analysis instance is already being processed in another window.", "warning")
+        return redirect(url_for('detail_analysis', instance_id=instance_id))
 
     try:
+        meta_path = os.path.join(instance_dir, 'meta.json')
+        meta = json.load(open(meta_path))
+        input_video_path = os.path.join(instance_dir, meta['input_filename'])
+
         # Run Phase 1 Processing (Extraction & Detection)
         metrics, fps = extract_kinematic_metrics(input_video_path)
         smashes = find_smashes(metrics, fps)
 
-        save_json(os.path.join(instance_dir, 'kinematics.json'), metrics)
+        # Plotting is now fully decoupled from Assessment generation
+        plot_smashes_kinematics(metrics, fps, smashes, output_dir=instance_dir)
+
+        save_kinematics_json(metrics, os.path.join(instance_dir, 'kinematics.json'))
         save_json(os.path.join(instance_dir, 'smashes.json'), smashes)
 
         # Update meta with extracted FPS
@@ -502,6 +552,8 @@ def analyze_smashes(instance_id):
         flash("Smash analysis complete. Ready for Risk Assessment.", "success")
     except Exception as e:
         flash(f"Analysis failed: {str(e)}", "error")
+    finally:
+        lock.release()
 
     return redirect(url_for('detail_analysis', instance_id=instance_id))
 
@@ -529,42 +581,50 @@ def detail_analysis(instance_id):
             flash("Please run Smash Analysis first.", "error")
             return redirect(request.url)
 
-        # Save Assessment Params to restore them next time
-        dec_option = request.form.get('dec_option', 'auto')
-        custom_dec = request.form.get('custom_dec', '')
+        lock = ProcessingLock(instance_dir)
+        if not lock.acquire():
+            flash("Risk Assessment is already running in another window for this instance.", "warning")
+            return redirect(request.url)
 
-        meta['dec_option'] = dec_option
-        meta['custom_dec'] = custom_dec
-        with open(meta_path, 'w') as f:
-            json.dump(meta, f)
+        try:
+            # Save Assessment Params to restore them next time
+            dec_option = request.form.get('dec_option', 'auto')
+            custom_dec = request.form.get('custom_dec', '')
 
-        # Phase 2: Assessment & Visualization Output Generation
-        if dec_option == 'custom' and custom_dec:
-            max_dec = float(custom_dec)
-        else:
-            max_dec = auto_max_dec
+            meta['dec_option'] = dec_option
+            meta['custom_dec'] = custom_dec
+            with open(meta_path, 'w') as f:
+                json.dump(meta, f)
 
-        metrics = load_json(os.path.join(instance_dir, 'kinematics.json'), FrameMetrics)
+            # Phase 2: Assessment & Visualization Output Generation
+            if dec_option == 'custom' and custom_dec:
+                max_dec = float(custom_dec)
+            else:
+                max_dec = auto_max_dec
 
-        # 1. Assess Risks
-        assessments = assess_smashes(metrics, smashes, max_critical_deceleration=max_dec)
-        save_json(os.path.join(instance_dir, 'assessments.json'), assessments)
+            metrics = load_json(os.path.join(instance_dir, 'kinematics.json'), FrameMetrics)
 
-        # 2. Generate Independent Plots Per Smash
-        plot_smashes_kinematics(metrics, fps, smashes, output_dir=instance_dir)
+            # 1. Assess Risks
+            assessments = assess_smashes(metrics, smashes, max_critical_deceleration=max_dec)
+            save_json(os.path.join(instance_dir, 'assessments.json'), assessments)
 
-        # 3. Generate Overlay Video
-        vid_path = os.path.join(instance_dir, 'analyzed.mp4')
-        overlay_kinematic_assessment(
-            input_video_path=input_video_path,
-            output_video_path=vid_path,
-            metrics=metrics,
-            smashes=smashes,
-            assessments=assessments,
-            overwrite=True
-        )
+            # 2. Generate Overlay Video
+            vid_path = os.path.join(instance_dir, 'analyzed.mp4')
+            overlay_kinematic_assessment(
+                input_video_path=input_video_path,
+                output_video_path=vid_path,
+                metrics=metrics,
+                smashes=smashes,
+                assessments=assessments,
+                overwrite=True
+            )
 
-        flash("Assessment successfully generated.", "success")
+            flash("Assessment successfully generated.", "success")
+        except Exception as e:
+            flash(f"Assessment failed: {str(e)}", "error")
+        finally:
+            lock.release()
+
         return redirect(request.url)
 
     # Render GET View
@@ -594,5 +654,6 @@ def absolute_value(number):
     return abs(number)
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    # Use 5001 instead of 5000 to avoid conflict with macOS AirPlay Receiver service
+    app.run(debug=True, port=5001)
 # endregion
