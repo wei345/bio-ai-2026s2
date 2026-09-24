@@ -1,6 +1,5 @@
-*.mp4
-*.png
 analyses/
+test_output/
 
 # Intellij project files
 *.iml
