@@ -242,6 +242,8 @@ def extract_kinematic_metrics(
 class SmashEvent:
     peak_frame_idx: int
     peak_time_str: str
+    critical_start_frame_idx: int
+    critical_start_time_str: str
     critical_end_frame_idx: int
     critical_end_time_str: str
     start_frame_idx: int
@@ -270,16 +272,14 @@ def find_smashes(kin_metrics: list[FrameMetrics],
                  pre_smash_buffer_ms: int = 500,
                  post_smash_buffer_ms: int = 300,
                  critical_deceleration_window_ms: int = 50,
+                 decel_search_window_ms: int = 200,
                  min_overhead_time_ms: int = 50) -> list[SmashEvent]:
-    """
-    Identifies badminton smashes by finding overhead swing blocks lasting at least min_overhead_time_ms,
-    locating the peak grip velocity, and extracting critical deceleration metrics.
-    """
-    smashes = []
 
+    smashes = []
     pre_frames = int((pre_smash_buffer_ms / 1000.0) * fps)
     post_frames = int((post_smash_buffer_ms / 1000.0) * fps)
     crit_dec_frames = max(1, int((critical_deceleration_window_ms / 1000.0) * fps))
+    dec_search_frames = int((decel_search_window_ms / 1000.0) * fps)
     max_ret_frames = int((max_returning_time_ms / 1000.0) * fps)
     min_overhead_frames = max(1, int((min_overhead_time_ms / 1000.0) * fps))
 
@@ -293,11 +293,11 @@ def find_smashes(kin_metrics: list[FrameMetrics],
             grip_y = m.grip_coord[1]
             head_y = m.head_coord[1]
 
-            if grip_y < head_y:  # Grip is physically higher than the head
+            if grip_y < head_y:
                 if not in_swing:
                     in_swing = True
                     start_idx = i
-            else:  # Grip dropped below the head
+            else:
                 if in_swing:
                     end_idx = i
                     if (end_idx - start_idx) >= min_overhead_frames:
@@ -331,13 +331,44 @@ def find_smashes(kin_metrics: list[FrameMetrics],
         if frames_to_return > max_ret_frames:
             continue
 
-        dec_start = peak_idx
-        dec_end = min(len(kin_metrics), peak_idx + crit_dec_frames)
+        # --- OPTIMIZED SLIDING LIST DECELERATION WINDOW ---
+        search_end = min(len(kin_metrics), peak_idx + dec_search_frames)
 
-        if dec_end > dec_start:
-            avg_dec = sum(kin_metrics[j].upper_arm_angular_acceleration for j in range(dec_start, dec_end)) / (dec_end - dec_start)
-        else:
-            avg_dec = 0.0
+        best_avg_dec = float('inf')
+        best_dec_start = peak_idx
+        best_dec_end = min(len(kin_metrics), peak_idx + crit_dec_frames)
+
+        sliding_list = []
+        sliding_sum = 0.0
+
+        # Traverse backwards to maintain a running forward-looking window in O(N) time
+        for j in range(search_end - 1, peak_idx - 1, -1):
+            accel = kin_metrics[j].upper_arm_angular_acceleration
+
+            if accel >= 0:
+                # Truncate the window entirely if a positive acceleration frame is hit
+                sliding_list.clear()
+                sliding_sum = 0.0
+            else:
+                sliding_list.append(accel)
+                sliding_sum += accel
+
+                # Maintain the maximum critical window size bounds (up to 50 ms)
+                if len(sliding_list) > crit_dec_frames:
+                    # pop(0) removes the temporally latest frame (highest index)
+                    removed_accel = sliding_list.pop(0)
+                    sliding_sum -= removed_accel
+
+                current_avg_dec = sliding_sum / len(sliding_list)
+
+                # Track the interval with the most extreme negative mean
+                if current_avg_dec < best_avg_dec:
+                    best_avg_dec = current_avg_dec
+                    best_dec_start = j
+                    best_dec_end = j + len(sliding_list)
+
+        avg_dec = best_avg_dec if best_avg_dec != float('inf') else 0.0
+        # --------------------------------------------------
 
         s_start = max(0, peak_idx - pre_frames)
         s_end = min(len(kin_metrics), peak_idx + post_frames)
@@ -345,8 +376,10 @@ def find_smashes(kin_metrics: list[FrameMetrics],
         smashes.append(SmashEvent(
             peak_frame_idx=peak_idx,
             peak_time_str=_format_timestamp(peak_idx, fps),
-            critical_end_frame_idx=dec_end,
-            critical_end_time_str=_format_timestamp(dec_end, fps),
+            critical_start_frame_idx=best_dec_start,
+            critical_start_time_str=_format_timestamp(best_dec_start, fps),
+            critical_end_frame_idx=best_dec_end,
+            critical_end_time_str=_format_timestamp(best_dec_end, fps),
             start_frame_idx=s_start,
             start_time_str=_format_timestamp(s_start, fps),
             end_frame_idx=s_end,
@@ -581,13 +614,14 @@ def plot_smashes_kinematics(metrics: list[FrameMetrics], fps: float,
         start_t = smash.start_frame_idx / fps
         end_t = smash.end_frame_idx / fps
         peak_t = smash.peak_frame_idx / fps
+        crit_start_t = smash.critical_start_frame_idx / fps
         crit_end_t = smash.critical_end_frame_idx / fps
 
         for ax in (ax1, ax2, ax3):
             ax.axvspan(start_t, end_t, color='gray', alpha=0.15, zorder=0)
-            ax.axvspan(peak_t, crit_end_t, color='red', alpha=0.15, zorder=0)
+            ax.axvspan(crit_start_t, crit_end_t, color='red', alpha=0.15, zorder=0)
             ax.axvline(x=peak_t, color='black', linestyle='--', linewidth=1.5, alpha=0.8, label='Kinematic Peak')
-            ax.axvline(x=crit_end_t, color='darkred', linestyle=':', linewidth=1.5, alpha=0.8, label='Crit. Window End')
+            # ax.axvline(x=crit_end_t, color='darkred', linestyle=':', linewidth=1.5, alpha=0.8, label='Crit. Window End')
 
         ax1.legend(loc='upper right')
         ax2.legend(loc='upper right')
@@ -688,7 +722,7 @@ def overlay_kinematic_assessment(input_video_path,
                                  smashes:list[SmashEvent] | None = None,
                                  assessments:list[SmashAssessment] | None = None,
                                  scale_linear=0.08,
-                                 scale_ang_accel=0.5,
+                                 scale_ang_accel=0.01,
                                  fallback_fps=120.0,
                                  show_labels=False,
                                  pixels_per_meter=None,

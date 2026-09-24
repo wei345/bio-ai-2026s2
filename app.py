@@ -612,6 +612,7 @@ def analyze_smashes(instance_id):
                 s.start_frame_idx += frame_offset
                 s.end_frame_idx += frame_offset
                 s.peak_frame_idx += frame_offset
+                s.critical_start_frame_idx += frame_offset
                 s.critical_end_frame_idx += frame_offset
                 s.overhead_start_frame_idx += frame_offset
                 s.overhead_end_frame_idx += frame_offset
@@ -620,6 +621,7 @@ def analyze_smashes(instance_id):
                 s.start_time_str = _format_timestamp(s.start_frame_idx, fps)
                 s.end_time_str = _format_timestamp(s.end_frame_idx, fps)
                 s.peak_time_str = _format_timestamp(s.peak_frame_idx, fps)
+                s.critical_start_time_str = _format_timestamp(s.critical_start_frame_idx, fps)
                 s.critical_end_time_str = _format_timestamp(s.critical_end_frame_idx, fps)
                 s.overhead_start_time_str = _format_timestamp(s.overhead_start_frame_idx, fps)
                 s.overhead_end_time_str = _format_timestamp(s.overhead_end_frame_idx, fps)
