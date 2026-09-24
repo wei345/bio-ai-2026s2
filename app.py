@@ -235,6 +235,11 @@ LIST_HTML = HTML_TOP + """
                 </td>
                 <td class="text-end">
                     <a href="/analyses/{{ instance.id }}" class="btn btn-sm btn-primary">View / Process</a>
+                    
+                    <form action="/analyses/{{ instance.id }}/clone" method="POST" class="d-inline">
+                        <button type="submit" class="btn btn-sm btn-secondary" onclick="return confirm('Create a new analysis instance from these videos?');">Clone</button>
+                    </form>
+                
                     <form action="/analyses/{{ instance.id }}/delete" method="POST" class="d-inline">
                         <button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('Delete this instance forever?');">Delete</button>
                     </form>
@@ -277,6 +282,11 @@ DETAIL_HTML = HTML_TOP + """
     <h2>Analysis: {{ instance_id }}</h2>
     <div>
         <a href="/analyses" class="btn btn-outline-secondary btn-sm me-2">Back to List</a>
+        
+        <form action="/analyses/{{ instance_id }}/clone" method="POST" class="d-inline">
+            <button type="submit" class="btn btn-sm btn-secondary me-2" onclick="return confirm('Create a new analysis instance from these videos?');">Clone</button>
+        </form>
+
         <form action="/analyses/{{ instance_id }}/delete" method="POST" class="d-inline">
             <button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('Delete this instance forever?');">Delete</button>
         </form>
@@ -746,6 +756,60 @@ def update_note(instance_id):
 
     flash("Note updated.", "success")
     return redirect(url_for('detail_analysis', instance_id=instance_id))
+
+@app.route('/analyses/<instance_id>/clone', methods=['POST'])
+def clone_analysis(instance_id):
+    src_dir = os.path.join(ANALYSES_DIR, instance_id)
+    if not os.path.exists(src_dir):
+        flash("Source analysis not found.", "error")
+        return redirect(url_for('list_analyses'))
+
+    # Generate a fresh instance ID
+    new_instance_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    new_dir = os.path.join(ANALYSES_DIR, new_instance_id)
+    os.makedirs(new_dir)
+
+    try:
+        # 1. Copy and update the note
+        src_note_path = os.path.join(src_dir, 'note.txt')
+        if os.path.exists(src_note_path):
+            with open(src_note_path, 'r') as f:
+                note_content = f.read()
+            with open(os.path.join(new_dir, 'note.txt'), 'w') as f:
+                f.write(f"Copy of {note_content}")
+
+        # 2. Copy the raw videos and reset metadata
+        src_meta_path = os.path.join(src_dir, 'meta.json')
+        if os.path.exists(src_meta_path):
+            with open(src_meta_path, 'r') as f:
+                meta = json.load(f)
+
+            raw_files = meta.get('raw_filenames', [])
+            for rf in raw_files:
+                src_file = os.path.join(src_dir, rf)
+                dest_file = os.path.join(new_dir, rf)
+                if os.path.exists(src_file):
+                    shutil.copy2(src_file, dest_file)
+
+            # Create a clean meta.json without the previous processing artifacts (like fps)
+            new_meta = {
+                "raw_filenames": raw_files,
+                "input_filename": meta.get('input_filename', 'joined_input.mp4'),
+                "dec_option": "auto",
+                "custom_dec": ""
+            }
+            with open(os.path.join(new_dir, 'meta.json'), 'w') as f:
+                json.dump(new_meta, f)
+
+        flash(f"Successfully cloned into new instance.", "success")
+        return redirect(url_for('detail_analysis', instance_id=new_instance_id))
+
+    except Exception as e:
+        # Cleanup partial directories on failure
+        if os.path.exists(new_dir):
+            shutil.rmtree(new_dir)
+        flash(f"Failed to clone instance: {str(e)}", "error")
+        return redirect(url_for('list_analyses'))
 
 # Static file serving for the generated outputs
 @app.route('/analyses/<instance_id>/<filename>')
