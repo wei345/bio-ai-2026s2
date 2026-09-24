@@ -21,7 +21,7 @@ from smash_analysis import (
 
 app = Flask(__name__)
 app.secret_key = "super_secret_key" # Required for flash messages
-ANALYSES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'analyses')
+ANALYSES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../data')
 os.makedirs(ANALYSES_DIR, exist_ok=True)
 
 # region JSON Serialization Helpers

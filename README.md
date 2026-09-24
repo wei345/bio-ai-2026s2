@@ -16,14 +16,19 @@ A prototype web application for extracting kinematic metrics from badminton smas
    python3 -m venv .venv
    source .venv/bin/activate
 
-   pip install opencv-python==5.0.0.93 mediapipe==0.10.14 numpy==2.4.6 scipy==1.17.1
-   pip install Flask==3.1.3 werkzeug==3.1.8
+   pip install -e .
    ````
+
+   The virtual environment only needs to be created once. When returning to the project directory later, simply activate the existing environment:
+
+   ```bash
+   source .venv/bin/activate
+   ```
 
 4. Start the web UI:
 
    ```bash
-   python app.py
+   python src/app.py
    ```
 
    If the application fails to start because the port is already in use, resolve the port conflict before continuing.
