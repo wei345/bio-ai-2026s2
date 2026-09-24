@@ -44,7 +44,7 @@ class FrameMetrics:
     grip_v: Tuple[float, float] = (0.0, 0.0)
 
     upper_arm_angular_speed: float = 0.0
-    upper_arm_angular_deceleration: float = 0.0
+    upper_arm_angular_acceleration: float = 0.0
 
     trunk_coord: Optional[Tuple[int, int]] = None
     shoulder_coord: Optional[Tuple[int, int]] = None
@@ -53,16 +53,6 @@ class FrameMetrics:
     grip_coord: Optional[Tuple[int, int]] = None
     head_coord: Optional[Tuple[int, int]] = None
 
-def _calculate_angle(a, b, c):
-    """Calculates the interior angle (in degrees) at vertex b formed by points a, b, and c."""
-    a = np.array(a)
-    b = np.array(b)
-    c = np.array(c)
-    radians = np.arctan2(c[1] - b[1], c[0] - b[0]) - np.arctan2(a[1] - b[1], a[0] - b[0])
-    angle = np.abs(radians * 180.0 / np.pi)
-    if angle > 180.0:
-        angle = 360.0 - angle
-    return angle
 
 def extract_kinematic_metrics(
         input_video_path: str,
@@ -72,35 +62,43 @@ def extract_kinematic_metrics(
         wrist_lm: mp.solutions.pose.PoseLandmark = mp.solutions.pose.PoseLandmark.RIGHT_WRIST,
         grip_lm: mp.solutions.pose.PoseLandmark = mp.solutions.pose.PoseLandmark.RIGHT_INDEX,
         head_lm: mp.solutions.pose.PoseLandmark = mp.solutions.pose.PoseLandmark.NOSE,
-        alpha: float = 0.35, fallback_fps=120) -> tuple[list[FrameMetrics], float]:
+        outlier_window_size: int = 5,
+        sg_coord_window: int = 11,
+        sg_coord_poly: int = 3,
+        sg_angle_window: int = 13,
+        sg_angle_poly: int = 3,
+        fallback_fps=120.0) -> tuple[List[FrameMetrics], float]:
 
     cap = cv2.VideoCapture(input_video_path)
     if not cap.isOpened():
         raise ValueError(f"Cannot open video file: {input_video_path}")
 
-    fps = int(cap.get(cv2.CAP_PROP_FPS))
-    if fps <= 0:
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    if fps <= 0 or np.isnan(fps):
         fps = fallback_fps
-
     dt = 1.0 / fps
+
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
     pose = mp.solutions.pose.Pose(
         static_image_mode=False,
-        model_complexity=1, # 1 for high-speed motion robustness
+        model_complexity=1,
         smooth_landmarks=True,
         min_detection_confidence=0.5,
         min_tracking_confidence=0.5
     )
 
-    metrics = []
+    # ---------------------------------------------------------
+    # PHASE 1: Raw Extraction (Stream Processing)
+    # ---------------------------------------------------------
+    raw_data = {
+        'trunk': [], 'shoulder': [], 'elbow': [],
+        'wrist': [], 'grip': [], 'head': []
+    }
 
-    trunk_state     = {"prev_pos": None, "vx": 0.0, "vy": 0.0}
-    shoulder_state  = {"prev_pos": None, "vx": 0.0, "vy": 0.0}
-    elbow_state     = {"prev_pos": None, "vx": 0.0, "vy": 0.0, "prev_angle": None, "omega": 0.0, "prev_omega": 0.0, "ang_accel": 0.0}
-    wrist_state     = {"prev_pos": None, "vx": 0.0, "vy": 0.0}
-    grip_state      = {"prev_pos": None, "vx": 0.0, "vy": 0.0}
+    # State tracker for forward-filling missing frames
+    last_valid = {k: (0.0, 0.0) for k in raw_data.keys()}
 
     while True:
         ret, frame = cap.read()
@@ -110,132 +108,130 @@ def extract_kinematic_metrics(
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         results = pose.process(frame_rgb)
 
-        m = FrameMetrics()
-
         if results.pose_landmarks:
-            landmarks = results.pose_landmarks.landmark
+            lm = results.pose_landmarks.landmark
+            last_valid['trunk'] = (lm[trunk_lm.value].x * width, lm[trunk_lm.value].y * height)
+            last_valid['shoulder'] = (lm[shoulder_lm.value].x * width, lm[shoulder_lm.value].y * height)
+            last_valid['elbow'] = (lm[elbow_lm.value].x * width, lm[elbow_lm.value].y * height)
+            last_valid['wrist'] = (lm[wrist_lm.value].x * width, lm[wrist_lm.value].y * height)
+            last_valid['grip'] = (lm[grip_lm.value].x * width, lm[grip_lm.value].y * height)
+            last_valid['head'] = (lm[head_lm.value].x * width, lm[head_lm.value].y * height)
 
-            hip = np.array([landmarks[trunk_lm.value].x * width, landmarks[trunk_lm.value].y * height])
-            shoulder = np.array([landmarks[shoulder_lm.value].x * width, landmarks[shoulder_lm.value].y * height])
-            elbow = np.array([landmarks[elbow_lm.value].x * width, landmarks[elbow_lm.value].y * height])
-            wrist = np.array([landmarks[wrist_lm.value].x * width, landmarks[wrist_lm.value].y * height])
-            index_finger = np.array([landmarks[grip_lm.value].x * width, landmarks[grip_lm.value].y * height])
-            nose = np.array([landmarks[head_lm.value].x * width, landmarks[head_lm.value].y * height])
-
-            m.trunk_coord = (int(hip[0]), int(hip[1]))
-            m.shoulder_coord = (int(shoulder[0]), int(shoulder[1]))
-            m.elbow_coord = (int(elbow[0]), int(elbow[1]))
-            m.wrist_coord = (int(wrist[0]), int(wrist[1]))
-            m.grip_coord = (int(index_finger[0]), int(index_finger[1]))
-            m.head_coord = (int(nose[0]), int(nose[1]))
-
-            # 1. TRUNK
-            if trunk_state["prev_pos"] is not None:
-                delta = hip - trunk_state["prev_pos"]
-                trunk_state["vx"] = alpha * (delta[0] / dt) + (1 - alpha) * trunk_state["vx"]
-                trunk_state["vy"] = alpha * (delta[1] / dt) + (1 - alpha) * trunk_state["vy"]
-                m.trunk_speed = float(np.sqrt(trunk_state["vx"]**2 + trunk_state["vy"]**2))
-                m.trunk_v = (trunk_state["vx"], trunk_state["vy"])
-            trunk_state["prev_pos"] = hip
-
-            # 2. SHOULDER
-            if shoulder_state["prev_pos"] is not None:
-                delta = shoulder - shoulder_state["prev_pos"]
-                shoulder_state["vx"] = alpha * (delta[0] / dt) + (1 - alpha) * shoulder_state["vx"]
-                shoulder_state["vy"] = alpha * (delta[1] / dt) + (1 - alpha) * shoulder_state["vy"]
-                m.shoulder_speed = float(np.sqrt(shoulder_state["vx"]**2 + shoulder_state["vy"]**2))
-                m.shoulder_v = (shoulder_state["vx"], shoulder_state["vy"])
-            shoulder_state["prev_pos"] = shoulder
-
-            # 3. ELBOW (Upper Arm) & Angular Kinematics
-            curr_angle = _calculate_angle(hip, shoulder, elbow)
-            if elbow_state["prev_pos"] is not None and elbow_state["prev_angle"] is not None:
-                delta = elbow - elbow_state["prev_pos"]
-                elbow_state["vx"] = alpha * (delta[0] / dt) + (1 - alpha) * elbow_state["vx"]
-                elbow_state["vy"] = alpha * (delta[1] / dt) + (1 - alpha) * elbow_state["vy"]
-                m.elbow_speed = float(np.sqrt(elbow_state["vx"]**2 + elbow_state["vy"]**2))
-                m.elbow_v = (elbow_state["vx"], elbow_state["vy"])
-
-                raw_omega = (curr_angle - elbow_state["prev_angle"]) / dt
-                elbow_state["omega"] = alpha * raw_omega + (1 - alpha) * elbow_state["omega"]
-                m.upper_arm_angular_speed = float(elbow_state["omega"])
-
-                raw_ang_accel = (elbow_state["omega"] - elbow_state["prev_omega"]) / dt
-                elbow_state["ang_accel"] = alpha * raw_ang_accel + (1 - alpha) * elbow_state["ang_accel"]
-                m.upper_arm_angular_deceleration = float(elbow_state["ang_accel"])
-
-                elbow_state["prev_omega"] = elbow_state["omega"]
-
-            elbow_state["prev_pos"] = elbow
-            elbow_state["prev_angle"] = curr_angle
-
-            # 4. WRIST (Forearm)
-            if wrist_state["prev_pos"] is not None:
-                delta = wrist - wrist_state["prev_pos"]
-                wrist_state["vx"] = alpha * (delta[0] / dt) + (1 - alpha) * wrist_state["vx"]
-                wrist_state["vy"] = alpha * (delta[1] / dt) + (1 - alpha) * wrist_state["vy"]
-                m.wrist_speed = float(np.sqrt(wrist_state["vx"]**2 + wrist_state["vy"]**2))
-                m.wrist_v = (wrist_state["vx"], wrist_state["vy"])
-            wrist_state["prev_pos"] = wrist
-
-            # 5. GRIP
-            if grip_state["prev_pos"] is not None:
-                delta = index_finger - grip_state["prev_pos"]
-                grip_state["vx"] = alpha * (delta[0] / dt) + (1 - alpha) * grip_state["vx"]
-                grip_state["vy"] = alpha * (delta[1] / dt) + (1 - alpha) * grip_state["vy"]
-                m.grip_speed = float(np.sqrt(grip_state["vx"]**2 + grip_state["vy"]**2))
-                m.grip_v = (grip_state["vx"], grip_state["vy"])
-            grip_state["prev_pos"] = index_finger
-
-        metrics.append(m)
+        for key in raw_data.keys():
+            raw_data[key].append(last_valid[key])
 
     cap.release()
     pose.close()
 
+    num_frames = len(raw_data['trunk'])
+    if num_frames == 0:
+        return [], fps
+
     # ---------------------------------------------------------
-    # Post-Processing: Outlier Rejection & Kinematic Smoothing
+    # PHASE 2: Dynamic Window Sizing
+    # Ensures filters don't crash if the clip is very short
     # ---------------------------------------------------------
-    # Applied to remove impossible human 50ms deceleration V-dips
-    # caused by 2D perspective distortions and tracking noise.
-    if len(metrics) > 11:
-        window_len = 11
-        poly_order = 3
-        med_size = 5 # Median filter size for spike removal
+    def _safe_window(requested_size, max_len, poly_order):
+        w = min(requested_size, max_len)
+        if w % 2 == 0: w -= 1
+        if w <= poly_order: w = poly_order + 2
+        if w % 2 == 0: w += 1
+        return w
 
-        def smooth_trajectory(data, is_speed=True):
-            # Step 1: Reject sudden outlier dips/spikes
-            # The current data is replaced with the median in a sliding window of med_size
-            despiked = median_filter(data, size=med_size)
-            # Step 2: Smooth the continuous trajectory
-            # It fits a 3rd-degree polynomial curve (a smooth, curved mathematical line)
-            # to those 11 points using a least-squares fit. It then uses that curve to
-            # calculate the new value for the center point (x=0).
-            # Standard moving averages flatten out real human movements, rounding
-            # off the peaks of a fast sprint or acceleration. SavGol preserves these
-            # natural peaks and valleys because it fits a curve rather than a flat line.
-            # It turns the "stair-step" into a smooth, mathematically fluid trajectory.
-            smoothed = savgol_filter(despiked, window_len, poly_order)
-            if is_speed:
-                smoothed = np.maximum(smoothed, 0.0) # Speed cannot be negative
-            return smoothed
+    c_win = _safe_window(sg_coord_window, num_frames, sg_coord_poly)
+    a_win = _safe_window(sg_angle_window, num_frames, sg_angle_poly)
+    m_win = min(outlier_window_size, num_frames)
+    if m_win % 2 == 0: m_win -= 1
 
-        trunk_s = smooth_trajectory([m.trunk_speed for m in metrics])
-        shoulder_s = smooth_trajectory([m.shoulder_speed for m in metrics])
-        elbow_s = smooth_trajectory([m.elbow_speed for m in metrics])
-        wrist_s = smooth_trajectory([m.wrist_speed for m in metrics])
-        grip_s = smooth_trajectory([m.grip_speed for m in metrics])
+    # ---------------------------------------------------------
+    # PHASE 3: Outlier Rejection & Coordinate Smoothing (Batch)
+    # ---------------------------------------------------------
+    smooth_coords = {}
+    for key, coords in raw_data.items():
+        arr = np.array(coords)
+        x_raw, y_raw = arr[:, 0], arr[:, 1]
 
-        ang_s = smooth_trajectory([m.upper_arm_angular_speed for m in metrics], is_speed=False)
-        ang_a = smooth_trajectory([m.upper_arm_angular_deceleration for m in metrics], is_speed=False)
+        # 1. Reject 1-frame spikes mathematically
+        x_med = median_filter(x_raw, size=m_win)
+        y_med = median_filter(y_raw, size=m_win)
 
-        for i, m in enumerate(metrics):
-            m.trunk_speed = float(trunk_s[i])
-            m.shoulder_speed = float(shoulder_s[i])
-            m.elbow_speed = float(elbow_s[i])
-            m.wrist_speed = float(wrist_s[i])
-            m.grip_speed = float(grip_s[i])
-            m.upper_arm_angular_speed = float(ang_s[i])
-            m.upper_arm_angular_deceleration = float(ang_a[i])
+        # 2. Smooth physical trajectory
+        x_sg = savgol_filter(x_med, c_win, sg_coord_poly)
+        y_sg = savgol_filter(y_med, c_win, sg_coord_poly)
+
+        smooth_coords[key] = (x_sg, y_sg)
+
+    # ---------------------------------------------------------
+    # PHASE 4: Linear Velocities (Centered Finite Differences)
+    # ---------------------------------------------------------
+    def calc_velocity(x, y):
+        vx = np.gradient(x, dt)
+        vy = np.gradient(y, dt)
+        speed = np.maximum(np.sqrt(vx**2 + vy**2), 0.0)
+        return vx, vy, speed
+
+    vx_trunk, vy_trunk, spd_trunk = calc_velocity(*smooth_coords['trunk'])
+    vx_shoulder, vy_shoulder, spd_shoulder = calc_velocity(*smooth_coords['shoulder'])
+    vx_elbow, vy_elbow, spd_elbow = calc_velocity(*smooth_coords['elbow'])
+    vx_wrist, vy_wrist, spd_wrist = calc_velocity(*smooth_coords['wrist'])
+    vx_grip, vy_grip, spd_grip = calc_velocity(*smooth_coords['grip'])
+
+    # ---------------------------------------------------------
+    # PHASE 5: Unwrapped Angular Kinematics (Analytical Derivs)
+    # ---------------------------------------------------------
+    tx, ty = smooth_coords['trunk']
+    sx, sy = smooth_coords['shoulder']
+    ex, ey = smooth_coords['elbow']
+
+    # Calculate directed angle using arctan2 to prevent 180-degree interior bounce
+    theta_elbow = np.arctan2(ey - sy, ex - sx)
+    theta_trunk = np.arctan2(ty - sy, tx - sx)
+    raw_radians = theta_elbow - theta_trunk
+
+    # Unwrap ensures continuous rotation without jumping from 359 to 0
+    unwrapped_radians = np.unwrap(raw_radians)
+    unwrapped_degrees = np.degrees(unwrapped_radians)
+
+    # Calculate exact analytical derivatives using Savitzky-Golay
+    ang_vel = savgol_filter(unwrapped_degrees, a_win, sg_angle_poly, deriv=1, delta=dt)
+    ang_acc = savgol_filter(unwrapped_degrees, a_win, sg_angle_poly, deriv=2, delta=dt)
+
+    # ---------------------------------------------------------
+    # PHASE 6: Reconstruct Output Array
+    # ---------------------------------------------------------
+    metrics = []
+    for i in range(num_frames):
+        m = FrameMetrics()
+
+        # Coordinates (cast back to int for UI drawing)
+        m.trunk_coord = (int(smooth_coords['trunk'][0][i]), int(smooth_coords['trunk'][1][i]))
+        m.shoulder_coord = (int(smooth_coords['shoulder'][0][i]), int(smooth_coords['shoulder'][1][i]))
+        m.elbow_coord = (int(smooth_coords['elbow'][0][i]), int(smooth_coords['elbow'][1][i]))
+        m.wrist_coord = (int(smooth_coords['wrist'][0][i]), int(smooth_coords['wrist'][1][i]))
+        m.grip_coord = (int(smooth_coords['grip'][0][i]), int(smooth_coords['grip'][1][i]))
+        m.head_coord = (int(smooth_coords['head'][0][i]), int(smooth_coords['head'][1][i]))
+
+        # Linear Kinematics
+        m.trunk_v = (float(vx_trunk[i]), float(vy_trunk[i]))
+        m.trunk_speed = float(spd_trunk[i])
+
+        m.shoulder_v = (float(vx_shoulder[i]), float(vy_shoulder[i]))
+        m.shoulder_speed = float(spd_shoulder[i])
+
+        m.elbow_v = (float(vx_elbow[i]), float(vy_elbow[i]))
+        m.elbow_speed = float(spd_elbow[i])
+
+        m.wrist_v = (float(vx_wrist[i]), float(vy_wrist[i]))
+        m.wrist_speed = float(spd_wrist[i])
+
+        m.grip_v = (float(vx_grip[i]), float(vy_grip[i]))
+        m.grip_speed = float(spd_grip[i])
+
+        # Angular Kinematics
+        m.upper_arm_angular_speed = float(ang_vel[i])
+        m.upper_arm_angular_acceleration = float(ang_acc[i])
+
+        metrics.append(m)
 
     return metrics, fps
 # endregion
@@ -339,7 +335,7 @@ def find_smashes(kin_metrics: list[FrameMetrics],
         dec_end = min(len(kin_metrics), peak_idx + crit_dec_frames)
 
         if dec_end > dec_start:
-            avg_dec = sum(kin_metrics[j].upper_arm_angular_deceleration for j in range(dec_start, dec_end)) / (dec_end - dec_start)
+            avg_dec = sum(kin_metrics[j].upper_arm_angular_acceleration for j in range(dec_start, dec_end)) / (dec_end - dec_start)
         else:
             avg_dec = 0.0
 
@@ -548,7 +544,7 @@ def plot_smashes_kinematics(metrics: list[FrameMetrics], fps: float,
         wrist_v = [m.wrist_speed for m in sliced_metrics]
         grip_v = [m.grip_speed for m in sliced_metrics]
 
-        ang_accel = [m.upper_arm_angular_deceleration for m in sliced_metrics]
+        ang_accel = [m.upper_arm_angular_acceleration for m in sliced_metrics]
         grip_y = [m.grip_coord[1] if m.grip_coord else np.nan for m in sliced_metrics]
         head_y = [m.head_coord[1] if m.head_coord else np.nan for m in sliced_metrics]
 
@@ -623,7 +619,7 @@ def plot_smashes_kinematics(metrics: list[FrameMetrics], fps: float,
 #   | 1 | 02:25 - 02:26 | 🟢 Low  |
 #   | 2 | 03:10 - 03:11 | 🔴 High |
 # %%
-def _draw_double_arrow(img, start_pt, end_pt, color, thickness=2):
+def _draw_double_arrow(img, start_pt, end_pt, color, thickness=2, scale=1.0):
     """
     Draws an arrow with a double-line shaft, mathematically matching
     the 'implies' symbol from the reference image.
@@ -639,12 +635,13 @@ def _draw_double_arrow(img, start_pt, end_pt, color, thickness=2):
     u = vec / length
     n = np.array([-u[1], u[0]])
 
-    offset = 3.0
-    tip_length = min(length * 0.35, 18.0)
-    tip_width = 8.0
+    # Apply the scale factor to the geometric properties
+    offset = 3.0 * scale
+    tip_length = min(length * 0.35, 18.0 * scale)
+    tip_width = 8.0 * scale
 
     if tip_width <= offset:
-        tip_width = offset + 2.0
+        tip_width = offset + (2.0 * scale)
 
     intersect_dist = (offset * tip_length) / tip_width
 
@@ -691,7 +688,8 @@ def overlay_kinematic_assessment(input_video_path,
                                  smashes:list[SmashEvent] | None = None,
                                  assessments:list[SmashAssessment] | None = None,
                                  scale_linear=0.08,
-                                 scale_ang_accel=0.01,
+                                 scale_ang_accel=0.5,
+                                 fallback_fps=120.0,
                                  show_labels=False,
                                  pixels_per_meter=None,
                                  overwrite=True):
@@ -714,7 +712,7 @@ def overlay_kinematic_assessment(input_video_path,
 
     fps = cap.get(cv2.CAP_PROP_FPS)
     if fps <= 0 or math.isnan(fps):
-        fps = 120.0
+        fps = fallback_fps
 
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -782,7 +780,7 @@ def overlay_kinematic_assessment(input_video_path,
                               int(start_pt[1] + m.elbow_v[1] * scale_linear))
                 cv2.arrowedLine(frame, start_pt, end_pt_vel, c_upper_arm, thick_thick, tipLength=0.25)
 
-                ang_accel = m.upper_arm_angular_deceleration
+                ang_accel = m.upper_arm_angular_acceleration
                 dx = m.elbow_coord[0] - m.shoulder_coord[0]
                 dy = m.elbow_coord[1] - m.shoulder_coord[1]
                 arm_length = math.hypot(dx, dy)
@@ -792,7 +790,7 @@ def overlay_kinematic_assessment(input_video_path,
                     visual_ax = perp_dx * ang_accel * scale_ang_accel
                     visual_ay = perp_dy * ang_accel * scale_ang_accel
                     end_pt_accel = (int(start_pt[0] + visual_ax), int(start_pt[1] + visual_ay))
-                    _draw_double_arrow(frame, start_pt, end_pt_accel, c_accel, thickness=thick_med)
+                    _draw_double_arrow(frame, start_pt, end_pt_accel, c_accel, thickness=thick_med, scale=size_scale)
 
                 cv2.circle(frame, start_pt, circle_radius, (0, 0, 255), -1)
                 if show_labels:
