@@ -258,6 +258,7 @@ NEW_HTML = HTML_TOP + """
                     <div class="mb-3">
                         <label class="form-label">Video Files (.mp4, .mov)</label>
                         <input class="form-control" type="file" name="videos" accept="video/*" multiple onchange="document.getElementById('noteInput').value = Array.from(this.files, file => file.name).join(', ')" required>
+                        <div class="form-text">Each video should be a continuous recording. Do not upload videos joined from separate clips.</div>
                     </div>
                     <div class="mb-4">
                         <label class="form-label">Note (Optional)</label>

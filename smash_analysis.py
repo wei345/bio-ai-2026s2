@@ -72,7 +72,7 @@ def extract_kinematic_metrics(
         wrist_lm: mp.solutions.pose.PoseLandmark = mp.solutions.pose.PoseLandmark.RIGHT_WRIST,
         grip_lm: mp.solutions.pose.PoseLandmark = mp.solutions.pose.PoseLandmark.RIGHT_INDEX,
         head_lm: mp.solutions.pose.PoseLandmark = mp.solutions.pose.PoseLandmark.NOSE,
-        alpha: float = 0.35) -> tuple[list[FrameMetrics], float]:
+        alpha: float = 0.35, fallback_fps=120) -> tuple[list[FrameMetrics], float]:
 
     cap = cv2.VideoCapture(input_video_path)
     if not cap.isOpened():
@@ -80,7 +80,7 @@ def extract_kinematic_metrics(
 
     fps = int(cap.get(cv2.CAP_PROP_FPS))
     if fps <= 0:
-        fps = 120
+        fps = fallback_fps
 
     dt = 1.0 / fps
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -196,7 +196,7 @@ def extract_kinematic_metrics(
     # Post-Processing: Outlier Rejection & Kinematic Smoothing
     # ---------------------------------------------------------
     # Applied to remove impossible human 50ms deceleration V-dips
-    # caused by 2D camera foreshortening and tracking artifacts.
+    # caused by 2D perspective distortions and tracking noise.
     if len(metrics) > 11:
         window_len = 11
         poly_order = 3
@@ -204,8 +204,16 @@ def extract_kinematic_metrics(
 
         def smooth_trajectory(data, is_speed=True):
             # Step 1: Reject sudden outlier dips/spikes
+            # The current data is replaced with the median in a sliding window of med_size
             despiked = median_filter(data, size=med_size)
             # Step 2: Smooth the continuous trajectory
+            # It fits a 3rd-degree polynomial curve (a smooth, curved mathematical line)
+            # to those 11 points using a least-squares fit. It then uses that curve to
+            # calculate the new value for the center point (x=0).
+            # Standard moving averages flatten out real human movements, rounding
+            # off the peaks of a fast sprint or acceleration. SavGol preserves these
+            # natural peaks and valleys because it fits a curve rather than a flat line.
+            # It turns the "stair-step" into a smooth, mathematically fluid trajectory.
             smoothed = savgol_filter(despiked, window_len, poly_order)
             if is_speed:
                 smoothed = np.maximum(smoothed, 0.0) # Speed cannot be negative
