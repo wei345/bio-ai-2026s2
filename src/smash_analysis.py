@@ -560,18 +560,16 @@ def assess_smashes(kin_metrics: list[FrameMetrics],
 
 # region Visualization:Graph
 # %%
-def plot_smash_kinematics(metrics: list[FrameMetrics], fps: float,
-                          smash: SmashEvent,
-                          smash_idx:int,
-                          output_file: str,
-                          use_joined_timeline=False):
+def plot_smash_kinematics(metrics: list[FrameMetrics],
+                          fps: float,
+                          smashes: list[SmashEvent],
+                          fig_name: str,
+                          fig_title: str="Kinematic Plot: Smash"):
+    """
+    Generates a 3-panel plot for smashes.
+    """
 
-    if use_joined_timeline:
-        offset = smash.joined_start_frame_idx
-        times = np.arange(offset, smash.joined_end_frame_idx) / fps
-    else:
-        offset = 0
-        times = np.arange(offset, len(metrics)) / fps
+    times = np.arange(len(metrics)) / fps
 
     trunk_v = [m.trunk_speed for m in metrics]
     shoulder_v = [m.shoulder_speed for m in metrics]
@@ -583,7 +581,7 @@ def plot_smash_kinematics(metrics: list[FrameMetrics], fps: float,
     head_y = [m.head_coord[1] if m.head_coord else np.nan for m in metrics]
 
     fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 10), sharex=True)
-    fig.suptitle(f'Kinematic Plot: Smash {smash_idx+1}', fontsize=16, fontweight='bold')
+    fig.suptitle(fig_title, fontsize=16, fontweight='bold')
 
     ax1.plot(times, trunk_v, label='Trunk', color='green', linewidth=1.5)
     ax1.plot(times, elbow_v, label='Upper Arm', color='blue', linewidth=1.5)
@@ -593,9 +591,9 @@ def plot_smash_kinematics(metrics: list[FrameMetrics], fps: float,
     ax1.set_title('Proximal-to-Distal Kinetic Chain & Velocity Amplification')
     ax1.grid(True, linestyle='--', alpha=0.6)
 
-    ax2.plot(times, ang_accel, label='Upper Arm Ang Accel/Decel', color='orange', linewidth=2)
+    ax2.plot(times, ang_accel, label='Upper Arm Ang Accel', color='orange', linewidth=2)
     ax2.axhline(0, color='black', linestyle='-', linewidth=1)
-    ax2.fill_between(times, 0, ang_accel, where=(np.array(ang_accel) < 0), color='red', alpha=0.3, label='Critical Deceleration Phase')
+    ax2.fill_between(times, 0, ang_accel, where=(np.array(ang_accel) < 0), color='red', alpha=0.3, label='Deceleration Phase')
     ax2.set_ylabel('Acceleration (deg/s²)')
     ax2.set_title('Upper Arm Angular Acceleration Profile')
     ax2.grid(True, linestyle='--', alpha=0.6)
@@ -609,46 +607,24 @@ def plot_smash_kinematics(metrics: list[FrameMetrics], fps: float,
     ax3.grid(True, linestyle='--', alpha=0.6)
 
     # Plot overlays matching absolute times
-    peak_t = (offset + smash.peak_frame_idx) / fps
-    crit_start_t = (offset + smash.critical_start_frame_idx) / fps
-    crit_end_t = (offset + smash.critical_end_frame_idx) / fps
-
-    for ax in (ax1, ax2, ax3):
-        ax.axvspan(crit_start_t, crit_end_t, color='red', alpha=0.15, zorder=0)
-        ax.axvline(x=peak_t, color='black', linestyle='--', linewidth=1.5, alpha=0.8, label='Kinematic Peak')
+    offset = 0
+    for smash in smashes:
+        peak_t = (offset + smash.peak_frame_idx) / fps
+        crit_start_t = (offset + smash.critical_start_frame_idx) / fps
+        crit_end_t = (offset + smash.critical_end_frame_idx) / fps
+        for ax in (ax1, ax2, ax3):
+            ax.axvspan(crit_start_t, crit_end_t, color='red', alpha=0.15, zorder=0)
+            ax.axvline(x=peak_t, color='black', linestyle='--', linewidth=1.5, alpha=0.8,
+                       label='Kinematic Peak' if offset == 0 else None)
+        offset += smash.end_frame_idx
 
     ax1.legend(loc='upper right')
     ax2.legend(loc='upper right')
     ax3.legend(loc='upper right')
 
     plt.tight_layout()
-    plt.savefig(output_file, dpi=300, bbox_inches='tight')
+    plt.savefig(fig_name, dpi=300, bbox_inches='tight')
     plt.close(fig)
-
-
-def plot_smashes_kinematics(metrics: list[FrameMetrics], fps: float,
-                            smashes: list[SmashEvent],
-                            output_dir: str,
-                            use_joined_timeline=False):
-    """
-    Generates a 3-panel plot for EACH smash individually.
-    Timeline is anchored relative to the global joined timeline for consistency.
-    """
-    for i, smash in enumerate(smashes):
-
-        start_idx = max(0, smash.joined_start_frame_idx)
-        end_idx = min(len(metrics), smash.joined_end_frame_idx)
-
-        sliced_metrics = metrics[start_idx:end_idx]
-
-        fig_name = os.path.join(output_dir, f'smash_{i}_kinematic_plot.png')
-
-        plot_smash_kinematics(metrics=sliced_metrics,
-                              fps=fps,
-                              smash=smash,
-                              smash_idx=i,
-                              output_file=fig_name,
-                              use_joined_timeline=use_joined_timeline)
 # endregion
 
 # region Visualization: Overlaying Video
@@ -845,7 +821,7 @@ def overlay_kinematic_assessment(input_video_path,
             cv2.arrowedLine(frame, start_pt, end_pt, c_grip, thick_thick, tipLength=0.25)
             cv2.circle(frame, start_pt, circle_radius, (0, 0, 255), -1)
 
-        # --- DRAW HUD TABLES ---
+        # --- DRAW HUD (Heads-Up Display) TABLES ---
         active_smash_idx = -1
         for i, s in enumerate(smashes):
             start_f = s.joined_start_frame_idx if use_joined_timeline else s.origin_start_frame_idx

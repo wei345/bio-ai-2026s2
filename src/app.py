@@ -13,7 +13,7 @@ os.environ['HEADLESS_MODE'] = '1'
 import cv2
 from smash_analysis import (
     extract_kinematic_metrics, find_smashes, assess_smashes,
-    plot_smashes_kinematics, overlay_kinematic_assessment,
+    plot_smash_kinematics, overlay_kinematic_assessment,
     FrameMetrics, SmashEvent, SmashAssessment, RiskLevel,
     format_sequence, _format_timestamp
 )
@@ -604,6 +604,16 @@ def analyze_smashes(instance_id):
             smash_metrics = all_metrics[start_idx:end_idx]
             save_kinematics_json(smash_metrics, os.path.join(instance_dir, f'smash_{i}_kinematics.json'))
 
+            fig_title = f"Kinematic Plot: Smash {i+1}"
+            fig_name = os.path.join(instance_dir, f'smash_{i}_kinematic_plot.png')
+
+            plot_smash_kinematics(
+                metrics=smash_metrics,
+                fps=global_fps,
+                smashes=[smash],
+                fig_title=fig_title,
+                fig_name=fig_name)
+
             raw_file = meta['raw_filenames'][smash.origin_video_idx]
             raw_path = os.path.join(instance_dir, raw_file)
             smash_overlay_path = os.path.join(instance_dir, f'smash_{i}_kinematic_overlay.mp4')
@@ -621,7 +631,6 @@ def analyze_smashes(instance_id):
             )
 
         # 3. Output Global Assets
-        plot_smashes_kinematics(all_metrics, global_fps, all_smashes, output_dir=instance_dir)
         save_kinematics_json(all_metrics, os.path.join(instance_dir, 'kinematics.json'))
         save_json(os.path.join(instance_dir, 'smashes.json'), all_smashes)
 
