@@ -89,11 +89,15 @@ def extract_kinematic_metrics(
         min_tracking_confidence=0.5
     )
 
+    # ---------------------------------------------------------
+    # PHASE 1: Raw Extraction (Stream Processing)
+    # ---------------------------------------------------------
     raw_data = {
         'trunk': [], 'shoulder': [], 'elbow': [],
         'wrist': [], 'grip': [], 'head': []
     }
 
+    # State tracker for forward-filling missing frames
     last_valid = {k: (0.0, 0.0) for k in raw_data.keys()}
 
     while True:
@@ -123,6 +127,10 @@ def extract_kinematic_metrics(
     if num_frames == 0:
         return [], fps
 
+    # ---------------------------------------------------------
+    # PHASE 2: Dynamic Window Sizing
+    # Ensures filters don't crash if the clip is very short
+    # ---------------------------------------------------------
     def _safe_window(requested_size, max_len, poly_order):
         w = min(requested_size, max_len)
         if w % 2 == 0: w -= 1
@@ -135,16 +143,24 @@ def extract_kinematic_metrics(
     m_win = min(outlier_window_size, num_frames)
     if m_win % 2 == 0: m_win -= 1
 
+    # ---------------------------------------------------------
+    # PHASE 3: Outlier Rejection & Coordinate Smoothing (Batch)
+    # ---------------------------------------------------------
     smooth_coords = {}
     for key, coords in raw_data.items():
         arr = np.array(coords)
         x_raw, y_raw = arr[:, 0], arr[:, 1]
+        # 1. Reject 1-frame spikes mathematically
         x_med = median_filter(x_raw, size=m_win)
         y_med = median_filter(y_raw, size=m_win)
+        # 2. Smooth physical trajectory
         x_sg = savgol_filter(x_med, c_win, sg_coord_poly)
         y_sg = savgol_filter(y_med, c_win, sg_coord_poly)
         smooth_coords[key] = (x_sg, y_sg)
 
+    # ---------------------------------------------------------
+    # PHASE 4: Linear Velocities (Centered Finite Differences)
+    # ---------------------------------------------------------
     def calc_velocity(x, y):
         vx = np.gradient(x, dt)
         vy = np.gradient(y, dt)
@@ -157,28 +173,39 @@ def extract_kinematic_metrics(
     vx_wrist, vy_wrist, spd_wrist = calc_velocity(*smooth_coords['wrist'])
     vx_grip, vy_grip, spd_grip = calc_velocity(*smooth_coords['grip'])
 
+    # ---------------------------------------------------------
+    # PHASE 5: Unwrapped Angular Kinematics (Analytical Derivs)
+    # ---------------------------------------------------------
     tx, ty = smooth_coords['trunk']
     sx, sy = smooth_coords['shoulder']
     ex, ey = smooth_coords['elbow']
 
+    # Calculate directed angle using arctan2 to prevent 180-degree interior bounce
     theta_elbow = np.arctan2(ey - sy, ex - sx)
     theta_trunk = np.arctan2(ty - sy, tx - sx)
     raw_radians = theta_elbow - theta_trunk
+    # Unwrap ensures continuous rotation without jumping from 359 to 0
     unwrapped_radians = np.unwrap(raw_radians)
     unwrapped_degrees = np.degrees(unwrapped_radians)
 
+    # Calculate exact analytical derivatives using Savitzky-Golay
     ang_vel = savgol_filter(unwrapped_degrees, a_win, sg_angle_poly, deriv=1, delta=dt)
     ang_acc = savgol_filter(unwrapped_degrees, a_win, sg_angle_poly, deriv=2, delta=dt)
 
+    # ---------------------------------------------------------
+    # PHASE 6: Reconstruct Output Array
+    # ---------------------------------------------------------
     metrics = []
     for i in range(num_frames):
         m = FrameMetrics()
+        # Coordinates (cast back to int for UI drawing)
         m.trunk_coord = (int(smooth_coords['trunk'][0][i]), int(smooth_coords['trunk'][1][i]))
         m.shoulder_coord = (int(smooth_coords['shoulder'][0][i]), int(smooth_coords['shoulder'][1][i]))
         m.elbow_coord = (int(smooth_coords['elbow'][0][i]), int(smooth_coords['elbow'][1][i]))
         m.wrist_coord = (int(smooth_coords['wrist'][0][i]), int(smooth_coords['wrist'][1][i]))
         m.grip_coord = (int(smooth_coords['grip'][0][i]), int(smooth_coords['grip'][1][i]))
         m.head_coord = (int(smooth_coords['head'][0][i]), int(smooth_coords['head'][1][i]))
+        # Linear Kinematics
         m.trunk_v = (float(vx_trunk[i]), float(vy_trunk[i]))
         m.trunk_speed = float(spd_trunk[i])
         m.shoulder_v = (float(vx_shoulder[i]), float(vy_shoulder[i]))
@@ -189,6 +216,7 @@ def extract_kinematic_metrics(
         m.wrist_speed = float(spd_wrist[i])
         m.grip_v = (float(vx_grip[i]), float(vy_grip[i]))
         m.grip_speed = float(spd_grip[i])
+        # Angular Kinematics
         m.upper_arm_angular_speed = float(ang_vel[i])
         m.upper_arm_angular_acceleration = float(ang_acc[i])
         metrics.append(m)
@@ -267,6 +295,7 @@ def find_smashes(kin_metrics: list[FrameMetrics],
     in_swing = False
     start_idx = 0
 
+    # 1. Identify all overhead swing blocks meeting the minimum duration
     for i, m in enumerate(kin_metrics):
         if m.grip_coord and m.head_coord:
             grip_y = m.grip_coord[1]
@@ -287,6 +316,7 @@ def find_smashes(kin_metrics: list[FrameMetrics],
         if (end_idx - start_idx) >= min_overhead_frames:
             swing_blocks.append((start_idx, end_idx))
 
+    # 2. Filter blocks and extract metrics anchored to the kinematic peak
     for start_idx, end_idx in swing_blocks:
         max_grip_speed = -float('inf')
         peak_idx = start_idx
@@ -305,6 +335,7 @@ def find_smashes(kin_metrics: list[FrameMetrics],
         if frames_to_return > max_ret_frames:
             continue
 
+        # --- OPTIMIZED SLIDING LIST DECELERATION WINDOW ---
         search_end = min(len(kin_metrics), peak_idx + dec_search_frames)
         best_avg_dec = float('inf')
         best_dec_start = peak_idx
@@ -313,19 +344,24 @@ def find_smashes(kin_metrics: list[FrameMetrics],
         sliding_list = []
         sliding_sum = 0.0
 
+        # Traverse backwards to maintain a running forward-looking window in O(N) time
         for j in range(search_end - 1, peak_idx - 1, -1):
             accel = kin_metrics[j].upper_arm_angular_acceleration
             if accel >= 0:
+                # Truncate the window entirely if a positive acceleration frame is hit
                 sliding_list.clear()
                 sliding_sum = 0.0
             else:
                 sliding_list.append(accel)
                 sliding_sum += accel
+                # Maintain the maximum critical window size bounds (up to 50 ms)
                 if len(sliding_list) > crit_dec_frames:
+                    # pop(0) removes the temporally latest frame (highest index)
                     removed_accel = sliding_list.pop(0)
                     sliding_sum -= removed_accel
 
                 current_avg_dec = sliding_sum / len(sliding_list)
+                # Track the interval with the most extreme negative mean
                 if current_avg_dec < best_avg_dec:
                     best_avg_dec = current_avg_dec
                     best_dec_start = j
@@ -402,10 +438,37 @@ def assess_smashes(kin_metrics: list[FrameMetrics],
                    high_risk_dec_threshold_pct: float = 0.85,
                    mod_risk_dec_threshold_pct: float = 0.7) -> list[SmashAssessment]:
 
+    """
+    Evaluates kinematic characteristics of identified badminton smashes to assess shoulder injury risk.
+
+    Checks three primary characteristics:
+    1. Proximal-to-distal (P-D) Sequence:
+       - Low Risk: Exact expected sequence (Trunk -> Upper Arm -> Forearm -> Grip).
+       - High Risk: Proximal segments (Trunk/Upper Arm) peak AFTER distal segments (Forearm/Grip).
+       - Moderate Risk: Minor sequencing errors (e.g., Trunk/Upper Arm swap, or Forearm/Grip swap).
+
+    2. Velocity Amplification:
+       - Low Risk: Speeds increase purely distally (Trunk < Upper Arm < Forearm < Grip).
+       - High Risk: Proximal segments are faster than distal segments.
+       - Moderate Risk: Minor amplification errors.
+
+    3. Upper-Arm Deceleration Rate:
+       - Low Risk: < max_critical_deceleration * mod_risk_dec_threshold_pct
+       - High Risk: >= max_critical_deceleration * high_risk_dec_threshold_pct
+       - Moderate Risk: Between the two thresholds.
+
+    Overall Risk Logic:
+    - Dictated primarily by deceleration risk if deceleration risk > LOW.
+    - Otherwise, if sequencing AND amplification are perfect, overall risk is LOW.
+    - If sequencing OR amplification are flawed but deceleration is safe, overall risk is MODERATE.
+    """
+
     assessments = []
+    # Ensure our max deceleration baseline is a positive magnitude for safe percentage math
     baseline_max_dec = abs(max_critical_deceleration)
 
     for smash in smashes:
+        # 1. Extract peak values and their frame indices within the smash window
         peaks = {
             'Trunk': {'val': -1.0, 'idx': -1},
             'Upper Arm': {'val': -1.0, 'idx': -1},
@@ -430,7 +493,10 @@ def assess_smashes(kin_metrics: list[FrameMetrics],
             if m.upper_arm_angular_speed > peak_ang_speed:
                 peak_ang_speed = m.upper_arm_angular_speed
 
+        # 2. Evaluate Proximal-to-Distal Sequence
+        # Sort segment names by the frame index they peaked at (ascending time)
         seq_sorted = sorted(peaks.keys(), key=lambda k: peaks[k]['idx'])
+        # Check High Risk Sequence: Proximal peaks AFTER Distal
         if (peaks['Trunk']['idx'] > peaks['Forearm']['idx'] or
             peaks['Trunk']['idx'] > peaks['Grip']['idx'] or
             peaks['Upper Arm']['idx'] > peaks['Forearm']['idx'] or
@@ -441,7 +507,10 @@ def assess_smashes(kin_metrics: list[FrameMetrics],
         else:
             seq_risk = RiskLevel.MODERATE
 
+        # 3. Evaluate Velocity Amplification
+        # Sort segment names by their peak velocity magnitude (ascending speed)
         amp_sorted = sorted(peaks.keys(), key=lambda k: peaks[k]['val'])
+        # Check High Risk Amplification: Proximal is FASTER than Distal
         if (peaks['Trunk']['val'] > peaks['Forearm']['val'] or
             peaks['Trunk']['val'] > peaks['Grip']['val'] or
             peaks['Upper Arm']['val'] > peaks['Forearm']['val'] or
@@ -452,7 +521,10 @@ def assess_smashes(kin_metrics: list[FrameMetrics],
         else:
             amp_risk = RiskLevel.MODERATE
 
+        # 4. Evaluate Critical Deceleration Risk
+        # Use absolute value to ensure negative acceleration (deceleration) scales correctly
         crit_dec_mag = abs(smash.critical_deceleration)
+        # 5. Determine Overall Risk
         if crit_dec_mag >= (baseline_max_dec * high_risk_dec_threshold_pct):
             dec_risk = RiskLevel.HIGH
         elif crit_dec_mag < (baseline_max_dec * mod_risk_dec_threshold_pct):
@@ -468,6 +540,7 @@ def assess_smashes(kin_metrics: list[FrameMetrics],
             else:
                 overall_risk = RiskLevel.MODERATE
 
+        # 6. Construct Final Object
         assessments.append(SmashAssessment(
             start_time_str=smash.joined_start_time_str,
             peak_time_str=smash.joined_start_time_str,
@@ -580,7 +653,28 @@ def plot_smashes_kinematics(metrics: list[FrameMetrics], fps: float,
 
 # region Visualization: Overlaying Video
 # %%
+# %% [markdown]
+# * Display speeds
+# * Display a detail assessment table at bottom-right of the screen during each smash
+#   Smash 1
+#
+#   | Feature   | Result                   | Risk    |
+#   |-----------|--------------------------|---------|
+#   | P-D Seq   | Core, Arm, Forearm, Hand | 🟢 Low  |
+#   | V-Amp     | Core, Arm, Hand, Forearm | 🟡 Mod  |
+#   | UA Decel  | 6.2k / 3.0k              | 🔴 High |
+# * Display a summary table at bottom-right of the screen after all smashes
+#
+#   | # | Time          | Risk    |
+#   |---|---------------|---------|
+#   | 1 | 02:25 - 02:26 | 🟢 Low  |
+#   | 2 | 03:10 - 03:11 | 🔴 High |
+
 def _draw_double_arrow(img, start_pt, end_pt, color, thickness=2, scale=1.0):
+    """
+    Draws an arrow with a double-line shaft, mathematically matching
+    the 'implies' symbol from the reference image.
+    """
     p1 = np.array(start_pt, dtype=float)
     p2 = np.array(end_pt, dtype=float)
     vec = p2 - p1
@@ -589,6 +683,7 @@ def _draw_double_arrow(img, start_pt, end_pt, color, thickness=2, scale=1.0):
 
     u = vec / length
     n = np.array([-u[1], u[0]])
+    # Apply the scale factor to the geometric properties
     offset = 3.0 * scale
     tip_length = min(length * 0.35, 18.0 * scale)
     tip_width = 8.0 * scale
@@ -610,6 +705,7 @@ def _draw_double_arrow(img, start_pt, end_pt, color, thickness=2, scale=1.0):
     cv2.line(img, (int(p2[0]), int(p2[1])), (int(wing2[0]), int(wing2[1])), color, thickness, cv2.LINE_AA)
 
 def _draw_table_overlay(frame, x, y, w, h):
+    """Helper to draw a semi-transparent background for tables."""
     overlay = frame.copy()
     cv2.rectangle(overlay, (x, y), (x + w, y + h), (0, 0, 0), -1)
     cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
@@ -620,6 +716,7 @@ def _get_risk_visuals(risk_level):
     else: return (0, 0, 255), "High"
 
 def format_sequence(seq):
+    """Shortens joint names to fit neatly in the table columns."""
     return ", ".join([s.replace("Upper Arm", "Arm").replace("Trunk", "Core").replace("Grip", "Hand") for s in seq])
 
 
@@ -664,17 +761,21 @@ def overlay_kinematic_assessment(input_video_path,
     unit_v = "px/s" if pixels_per_meter is None else "m/s"
     fmt_v = "{:.0f}" if pixels_per_meter is None else "{:.2f}"
 
+    # Arrow Colors (BGR)
     c_trunk = (0, 255, 0)
     c_upper_arm = (255, 0, 0)
     c_accel = (0, 165, 255)
     c_forearm = (0, 165, 255)
     c_grip = (0, 0, 255)
 
+    # --- DYNAMIC SCALING SETUP ---
     size_scale = width / 1024.0
+    # Fonts
     font_title = max(0.4, 0.7 * size_scale)
     font_header = max(0.3, 0.6 * size_scale)
     font_base = max(0.3, 0.5 * size_scale)
     font_small = max(0.2, 0.4 * size_scale)
+    # Thicknesses (Must be integers >= 1)
     thick_thin = max(1, int(1 * size_scale))
     thick_med = max(1, int(2 * size_scale))
     thick_thick = max(1, int(3 * size_scale))
@@ -753,6 +854,9 @@ def overlay_kinematic_assessment(input_video_path,
         if active_smash_idx != -1 and active_smash_idx < len(assessments):
             a = assessments[active_smash_idx]
 
+            # ==========================================
+            # TABLE 1 LAYOUT PARAMETERS
+            # ==========================================
             t1_margin_right = int(15 * size_scale)
             t1_y_from_top = height - int(260 * size_scale)
             t1_pad_x = int(15 * size_scale)
@@ -770,28 +874,34 @@ def overlay_kinematic_assessment(input_video_path,
 
             _draw_table_overlay(frame, tx, ty, tw, th)
 
+            # Titles & Headers
             cv2.putText(frame, f"Smash {active_smash_idx + 1}", (tx + t1_pad_x, ty + t1_pad_y_top), cv2.FONT_HERSHEY_SIMPLEX, font_title, (255, 255, 255), thick_med, cv2.LINE_AA)
             cv2.line(frame, (tx + t1_pad_x, ty + t1_pad_y_top + int(10 * size_scale)), (tx + tw - t1_pad_x, ty + t1_pad_y_top + int(10 * size_scale)), (255, 255, 255), thick_thin)
 
+            # Calculated Column Offsets
             col1 = tx + t1_pad_x
             col2 = col1 + t1_col1_w
             col3 = col2 + t1_col2_w
             y_base = ty + t1_pad_y_top + int(40 * size_scale)
 
+            # Headers
             cv2.putText(frame, "Feature", (col1, y_base), cv2.FONT_HERSHEY_SIMPLEX, font_base, (200, 200, 200), thick_thin, cv2.LINE_AA)
             cv2.putText(frame, "Result", (col2, y_base), cv2.FONT_HERSHEY_SIMPLEX, font_base, (200, 200, 200), thick_thin, cv2.LINE_AA)
             cv2.putText(frame, "Risk", (col3, y_base), cv2.FONT_HERSHEY_SIMPLEX, font_base, (200, 200, 200), thick_thin, cv2.LINE_AA)
 
+            # Row 1: P-D Sequence
             c_pd, txt_pd = _get_risk_visuals(a.p_d_sequence_risk)
             cv2.putText(frame, "P-D Seq", (col1, y_base + t1_row_h), cv2.FONT_HERSHEY_SIMPLEX, font_base, (255, 255, 255), thick_thin, cv2.LINE_AA)
             cv2.putText(frame, format_sequence(a.p_d_sequence), (col2, y_base + t1_row_h), cv2.FONT_HERSHEY_SIMPLEX, font_base, (255, 255, 255), thick_thin, cv2.LINE_AA)
             cv2.putText(frame, txt_pd, (col3, y_base + t1_row_h), cv2.FONT_HERSHEY_SIMPLEX, font_base, c_pd, thick_med, cv2.LINE_AA)
 
+            # Row 2: Velocity Amplification
             c_amp, txt_amp = _get_risk_visuals(a.velocity_amplification_risk)
             cv2.putText(frame, "V-Amp", (col1, y_base + t1_row_h * 2), cv2.FONT_HERSHEY_SIMPLEX, font_base, (255, 255, 255), thick_thin, cv2.LINE_AA)
             cv2.putText(frame, format_sequence(a.velocity_amplification), (col2, y_base + t1_row_h * 2), cv2.FONT_HERSHEY_SIMPLEX, font_base, (255, 255, 255), thick_thin, cv2.LINE_AA)
             cv2.putText(frame, txt_amp, (col3, y_base + t1_row_h * 2), cv2.FONT_HERSHEY_SIMPLEX, font_base, c_amp, thick_med, cv2.LINE_AA)
 
+            # Row 3: UA Deceleration
             c_dec, txt_dec = _get_risk_visuals(a.critical_deceleration_risk)
             cv2.putText(frame, "UA Decel", (col1, y_base + t1_row_h * 3), cv2.FONT_HERSHEY_SIMPLEX, font_base, (255, 255, 255), thick_thin, cv2.LINE_AA)
             cv2.putText(frame, f"{abs(a.critical_deceleration):.0f} deg/s²", (col2, y_base + t1_row_h * 3), cv2.FONT_HERSHEY_SIMPLEX, font_base, (255, 255, 255), thick_thin, cv2.LINE_AA)
@@ -799,6 +909,9 @@ def overlay_kinematic_assessment(input_video_path,
 
         # Overall Summary HUD (Only trigger for fully joined overlay)
         elif frame_idx > summary_start_frame:
+            # ==========================================
+            # TABLE 2 LAYOUT PARAMETERS
+            # ==========================================
             t2_margin_right = int(30 * size_scale)
             t2_margin_bottom = int(90 * size_scale)
             t2_pad_x = int(15 * size_scale)
@@ -827,6 +940,7 @@ def overlay_kinematic_assessment(input_video_path,
             cv2.putText(frame, "Time", (col2, y_base), cv2.FONT_HERSHEY_SIMPLEX, font_base, (200, 200, 200), thick_thin, cv2.LINE_AA)
             cv2.putText(frame, "Risk", (col3, y_base), cv2.FONT_HERSHEY_SIMPLEX, font_base, (200, 200, 200), thick_thin, cv2.LINE_AA)
 
+            # Populate Smash Rows
             for i, a in enumerate(assessments):
                 row_y = y_base + (i + 1) * t2_row_h
                 c_risk, txt_risk = _get_risk_visuals(a.overall_risk)

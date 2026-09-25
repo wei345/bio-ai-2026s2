@@ -62,6 +62,7 @@ class ProcessingLock:
         self.lock_file = os.path.join(instance_dir, '.processing_lock')
 
     def acquire(self):
+        # os.O_EXCL ensures this raises FileExistsError if the lock file already exists
         try:
             fd = os.open(self.lock_file, os.O_CREAT | os.O_EXCL | os.O_RDWR)
             os.close(fd)
@@ -77,6 +78,7 @@ class ProcessingLock:
                 pass
 # endregion
 
+# Register the function globally so Jinja can use it in the HTML templates
 app.jinja_env.globals.update(format_sequence=format_sequence)
 
 # region HTML Templates (Bootstrap 5)
@@ -235,6 +237,7 @@ NEW_HTML = HTML_TOP + """
 """ + HTML_BOTTOM
 
 DETAIL_HTML = HTML_TOP + """
+<!-- Editable Note Section -->
 <div class="d-flex justify-content-between align-items-center mb-4">
     <h2>Analysis: {{ instance_id }}</h2>
     <div>
@@ -460,6 +463,7 @@ def _concatenate_videos(input_paths: list[str], output_path: str):
     """Stitches multiple video files into a single continuous MP4."""
     if not input_paths: return
 
+    # Force uniform dimensions to prevent VideoWriter crash on mixed resolutions
     cap = cv2.VideoCapture(input_paths[0])
     fps = cap.get(cv2.CAP_PROP_FPS)
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -789,11 +793,13 @@ def clone_analysis(instance_id):
         flash("Source analysis not found.", "error")
         return redirect(url_for('list_analyses'))
 
+    # Generate a fresh instance ID
     new_instance_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     new_dir = os.path.join(ANALYSES_DIR, new_instance_id)
     os.makedirs(new_dir)
 
     try:
+        # 1. Copy and update the note
         src_note_path = os.path.join(src_dir, 'note.txt')
         if os.path.exists(src_note_path):
             with open(src_note_path, 'r') as f:
@@ -801,6 +807,7 @@ def clone_analysis(instance_id):
             with open(os.path.join(new_dir, 'note.txt'), 'w') as f:
                 f.write(f"Copy of {note_content}")
 
+        # 2. Copy the raw videos and reset metadata
         src_meta_path = os.path.join(src_dir, 'meta.json')
         if os.path.exists(src_meta_path):
             with open(src_meta_path, 'r') as f:
@@ -813,6 +820,7 @@ def clone_analysis(instance_id):
                 if os.path.exists(src_file):
                     shutil.copy2(src_file, dest_file)
 
+            # Create a clean meta.json without the previous processing artifacts (like fps)
             new_meta = {
                 "raw_filenames": raw_files,
                 "input_filename": meta.get('input_filename', 'joined_input.mp4'),
@@ -826,19 +834,23 @@ def clone_analysis(instance_id):
         return redirect(url_for('detail_analysis', instance_id=new_instance_id))
 
     except Exception as e:
+        # Cleanup partial directories on failure
         if os.path.exists(new_dir):
             shutil.rmtree(new_dir)
         flash(f"Failed to clone instance: {str(e)}", "error")
         return redirect(url_for('list_analyses'))
 
+# Static file serving for the generated outputs
 @app.route('/analyses/<instance_id>/<filename>')
 def serve_file(instance_id, filename):
     return send_from_directory(os.path.join(ANALYSES_DIR, instance_id), filename)
 
+# Custom absolute value filter for Jinja templating
 @app.template_filter('abs')
 def absolute_value(number):
     return abs(number)
 
+# Use 5001 instead of 5000 to avoid conflict with macOS AirPlay Receiver service
 if __name__ == '__main__':
     app.run(debug=True, port=5001)
 # endregion
