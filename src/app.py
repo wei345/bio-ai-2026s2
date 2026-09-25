@@ -432,7 +432,7 @@ DETAIL_HTML = HTML_TOP + """
     <div class="col-12">
         <div class="card shadow-sm h-100">
             <div class="card-header bg-white d-flex justify-content-between align-items-center">
-                <h5 class="mb-0">Joined Global Videos</h5>
+                <h5 class="mb-0">Joined Videos</h5>
                 <div class="btn-group" role="group">
                     <input type="radio" class="btn-check" name="videoToggle" id="origVidBtn" autocomplete="off" onchange="document.getElementById('origVideo').style.display='block'; document.getElementById('overlayVideo').style.display='none';">
                     <label class="btn btn-outline-primary btn-sm" for="origVidBtn">Original Concatenated</label>
