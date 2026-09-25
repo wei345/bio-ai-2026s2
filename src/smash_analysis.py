@@ -710,15 +710,18 @@ def _draw_table_overlay(frame, x, y, w, h):
     cv2.rectangle(overlay, (x, y), (x + w, y + h), (0, 0, 0), -1)
     cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
 
-def _get_risk_visuals(risk_level):
-    if risk_level == 0: return (0, 255, 0), "Low"
-    elif risk_level == 1: return (0, 255, 255), "Mod"
-    else: return (0, 0, 255), "High"
-
 def format_sequence(seq):
     """Shortens joint names to fit neatly in the table columns."""
     return ", ".join([s.replace("Upper Arm", "Arm").replace("Trunk", "Core").replace("Grip", "Hand") for s in seq])
 
+def _get_risk_visuals(risk_level):
+    """Maps the RiskLevel enum to BGR colors and string labels."""
+    if risk_level == 0:
+        return (84, 135, 25), "Low"     # BGR for RGB: 25, 135, 84
+    elif risk_level == 1:
+        return (7, 193, 255), "Mod"     # BGR for RGB: 255, 193, 7
+    else:
+        return (69, 53, 220), "High"    # BGR for RGB: 220, 53, 69
 
 def overlay_kinematic_assessment(input_video_path,
                                  output_video_path,
@@ -771,6 +774,7 @@ def overlay_kinematic_assessment(input_video_path,
     # --- DYNAMIC SCALING SETUP ---
     size_scale = width / 1024.0
     # Fonts
+    font_solid_circle = max(0.5, 0.8 * size_scale)
     font_title = max(0.4, 0.7 * size_scale)
     font_header = max(0.3, 0.6 * size_scale)
     font_base = max(0.3, 0.5 * size_scale)
@@ -863,9 +867,9 @@ def overlay_kinematic_assessment(input_video_path,
             t1_pad_y_top = int(30 * size_scale)
             t1_row_h = int(30 * size_scale)
             t1_bottom_pad = int(15 * size_scale)
-            t1_col1_w = int(80 * size_scale)
-            t1_col2_w = int(200 * size_scale)
-            t1_col3_w = int(40 * size_scale)
+            t1_col1_w = int(90 * size_scale)
+            t1_col2_w = int(205 * size_scale)
+            t1_col3_w = int(25 * size_scale)
 
             tw = t1_pad_x + t1_col1_w + t1_col2_w + t1_col3_w + t1_pad_x
             th = t1_pad_y_top + int(10 * size_scale) + t1_row_h + (3 * t1_row_h) + t1_bottom_pad
@@ -874,8 +878,11 @@ def overlay_kinematic_assessment(input_video_path,
 
             _draw_table_overlay(frame, tx, ty, tw, th)
 
-            # Titles & Headers
+            # Titles & Overall Risk
+            c_overall, txt_overall = _get_risk_visuals(a.overall_risk)
             cv2.putText(frame, f"Smash {active_smash_idx + 1}", (tx + t1_pad_x, ty + t1_pad_y_top), cv2.FONT_HERSHEY_SIMPLEX, font_title, (255, 255, 255), thick_med, cv2.LINE_AA)
+            cv2.putText(frame, f"Risk: ", (tx + tw - t1_pad_x - int(90 * size_scale), ty + t1_pad_y_top), cv2.FONT_HERSHEY_SIMPLEX, font_base, (200, 200, 200), thick_thin, cv2.LINE_AA)
+            cv2.putText(frame, f"{txt_overall}", (tx + tw - t1_pad_x - int(48 * size_scale), ty + t1_pad_y_top), cv2.FONT_HERSHEY_SIMPLEX, font_title, c_overall, thick_med, cv2.LINE_AA)
             cv2.line(frame, (tx + t1_pad_x, ty + t1_pad_y_top + int(10 * size_scale)), (tx + tw - t1_pad_x, ty + t1_pad_y_top + int(10 * size_scale)), (255, 255, 255), thick_thin)
 
             # Calculated Column Offsets
@@ -887,25 +894,25 @@ def overlay_kinematic_assessment(input_video_path,
             # Headers
             cv2.putText(frame, "Feature", (col1, y_base), cv2.FONT_HERSHEY_SIMPLEX, font_base, (200, 200, 200), thick_thin, cv2.LINE_AA)
             cv2.putText(frame, "Result", (col2, y_base), cv2.FONT_HERSHEY_SIMPLEX, font_base, (200, 200, 200), thick_thin, cv2.LINE_AA)
-            cv2.putText(frame, "Risk", (col3, y_base), cv2.FONT_HERSHEY_SIMPLEX, font_base, (200, 200, 200), thick_thin, cv2.LINE_AA)
+            # cv2.putText(frame, "Risk", (col3, y_base), cv2.FONT_HERSHEY_SIMPLEX, font_base, (200, 200, 200), thick_thin, cv2.LINE_AA)
 
             # Row 1: P-D Sequence
-            c_pd, txt_pd = _get_risk_visuals(a.p_d_sequence_risk)
+            c_pd, _ = _get_risk_visuals(a.p_d_sequence_risk)
             cv2.putText(frame, "P-D Seq", (col1, y_base + t1_row_h), cv2.FONT_HERSHEY_SIMPLEX, font_base, (255, 255, 255), thick_thin, cv2.LINE_AA)
             cv2.putText(frame, format_sequence(a.p_d_sequence), (col2, y_base + t1_row_h), cv2.FONT_HERSHEY_SIMPLEX, font_base, (255, 255, 255), thick_thin, cv2.LINE_AA)
-            cv2.putText(frame, txt_pd, (col3, y_base + t1_row_h), cv2.FONT_HERSHEY_SIMPLEX, font_base, c_pd, thick_med, cv2.LINE_AA)
+            cv2.putText(frame, "●", (col3, y_base + int(t1_row_h * 1.15)), cv2.FONT_HERSHEY_SIMPLEX, font_solid_circle, c_pd, thick_med, cv2.LINE_AA)
 
             # Row 2: Velocity Amplification
-            c_amp, txt_amp = _get_risk_visuals(a.velocity_amplification_risk)
+            c_amp, _ = _get_risk_visuals(a.velocity_amplification_risk)
             cv2.putText(frame, "V-Amp", (col1, y_base + t1_row_h * 2), cv2.FONT_HERSHEY_SIMPLEX, font_base, (255, 255, 255), thick_thin, cv2.LINE_AA)
             cv2.putText(frame, format_sequence(a.velocity_amplification), (col2, y_base + t1_row_h * 2), cv2.FONT_HERSHEY_SIMPLEX, font_base, (255, 255, 255), thick_thin, cv2.LINE_AA)
-            cv2.putText(frame, txt_amp, (col3, y_base + t1_row_h * 2), cv2.FONT_HERSHEY_SIMPLEX, font_base, c_amp, thick_med, cv2.LINE_AA)
+            cv2.putText(frame, "●", (col3, y_base + int(t1_row_h * 2.15)), cv2.FONT_HERSHEY_SIMPLEX, font_solid_circle, c_amp, thick_med, cv2.LINE_AA)
 
             # Row 3: UA Deceleration
-            c_dec, txt_dec = _get_risk_visuals(a.critical_deceleration_risk)
+            c_dec, _ = _get_risk_visuals(a.critical_deceleration_risk)
             cv2.putText(frame, "UA Decel", (col1, y_base + t1_row_h * 3), cv2.FONT_HERSHEY_SIMPLEX, font_base, (255, 255, 255), thick_thin, cv2.LINE_AA)
             cv2.putText(frame, f"{abs(a.critical_deceleration):.0f} deg/s²", (col2, y_base + t1_row_h * 3), cv2.FONT_HERSHEY_SIMPLEX, font_base, (255, 255, 255), thick_thin, cv2.LINE_AA)
-            cv2.putText(frame, txt_dec, (col3, y_base + t1_row_h * 3), cv2.FONT_HERSHEY_SIMPLEX, font_base, c_dec, thick_med, cv2.LINE_AA)
+            cv2.putText(frame, "●", (col3, y_base + int(t1_row_h * 3.15)), cv2.FONT_HERSHEY_SIMPLEX, font_solid_circle, c_dec, thick_med, cv2.LINE_AA)
 
         # Overall Summary HUD (Only trigger for fully joined overlay)
         elif frame_idx > summary_start_frame:
