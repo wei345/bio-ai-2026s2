@@ -593,7 +593,7 @@ def plot_smash_kinematics(metrics: list[FrameMetrics],
 
     ax2.plot(times, ang_accel, label='Upper Arm Ang Accel', color='orange', linewidth=2)
     ax2.axhline(0, color='black', linestyle='-', linewidth=1)
-    ax2.fill_between(times, 0, ang_accel, where=(np.array(ang_accel) < 0), color='red', alpha=0.3, label='Deceleration Phase')
+    ax2.fill_between(times, 0, ang_accel, where=(np.array(ang_accel) < 0), color='#FFE699', alpha=0.5, label='Deceleration')
     ax2.set_ylabel('Acceleration (deg/s²)')
     ax2.set_title('Upper Arm Angular Acceleration Profile')
     ax2.grid(True, linestyle='--', alpha=0.6)
@@ -613,14 +613,15 @@ def plot_smash_kinematics(metrics: list[FrameMetrics],
         crit_start_t = (offset + smash.critical_start_frame_idx) / fps
         crit_end_t = (offset + smash.critical_end_frame_idx) / fps
         for ax in (ax1, ax2, ax3):
-            ax.axvspan(crit_start_t, crit_end_t, color='red', alpha=0.15, zorder=0)
             ax.axvline(x=peak_t, color='black', linestyle='--', linewidth=1.5, alpha=0.8,
                        label='Kinematic Peak' if offset == 0 else None)
+            ax.axvspan(crit_start_t, crit_end_t, color='red', alpha=0.15, zorder=0,
+                       label="Critical Decel Phase" if offset == 0 else None)
         offset += smash.end_frame_idx
 
-    ax1.legend(loc='upper right')
-    ax2.legend(loc='upper right')
-    ax3.legend(loc='upper right')
+    ax1.legend(loc='upper left')
+    ax2.legend(loc='upper left')
+    ax3.legend(loc='upper left')
 
     plt.tight_layout()
     plt.savefig(fig_name, dpi=300, bbox_inches='tight')
@@ -636,15 +637,15 @@ def plot_smash_kinematics(metrics: list[FrameMetrics],
 #
 #   | Feature   | Result                   | Risk    |
 #   |-----------|--------------------------|---------|
-#   | P-D Seq   | Core, Arm, Forearm, Hand | 🟢 Low  |
-#   | V-Amp     | Core, Arm, Hand, Forearm | 🟡 Mod  |
-#   | UA Decel  | 6.2k / 3.0k              | 🔴 High |
+#   | P-D Seq   | Core, Arm, Forearm, Hand | 🟢      |
+#   | V-Amp     | Core, Arm, Hand, Forearm | 🟡      |
+#   | UA Decel  | 6.2k / 3.0k              | 🔴      |
 # * Display a summary table at bottom-right of the screen after all smashes
 #
-#   | # | Time          | Risk    |
+#   | # | Time          |   Risk  |
 #   |---|---------------|---------|
-#   | 1 | 02:25 - 02:26 | 🟢 Low  |
-#   | 2 | 03:10 - 03:11 | 🔴 High |
+#   | 1 | 02:25 - 02:26 |   Low   |
+#   | 2 | 03:10 - 03:11 |   High  |
 
 def _draw_double_arrow(img, start_pt, end_pt, color, thickness=2, scale=1.0):
     """

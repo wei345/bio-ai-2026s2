@@ -270,7 +270,7 @@ DETAIL_HTML = HTML_TOP + """
             <div class="card-body d-flex flex-column justify-content-between">
                 <div>
                     <h5 class="card-title">Smash Analysis</h5>
-                    <p class="text-muted small mb-0">Extract kinematics, generate local plots, and isolate individual smash video overlays.</p>
+                    <p class="text-muted small mb-0">Extract kinematics, generate smash plots, and isolate individual smash video overlays.</p>
                 </div>
                 
                 {% if not has_analysis %}
