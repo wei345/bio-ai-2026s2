@@ -10,7 +10,6 @@ from flask import Flask, render_template_string, request, redirect, url_for, sen
 # Force headless mode for matplotlib before importing the analysis pipeline
 os.environ['HEADLESS_MODE'] = '1'
 
-# Import your analysis pipeline
 import cv2
 from smash_analysis import (
     extract_kinematic_metrics, find_smashes, assess_smashes,
@@ -20,7 +19,7 @@ from smash_analysis import (
 )
 
 app = Flask(__name__)
-app.secret_key = "super_secret_key" # Required for flash messages
+app.secret_key = "super_secret_key"
 ANALYSES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../data')
 os.makedirs(ANALYSES_DIR, exist_ok=True)
 
@@ -64,7 +63,6 @@ class ProcessingLock:
 
     def acquire(self):
         try:
-            # os.O_EXCL ensures this raises FileExistsError if the lock file already exists
             fd = os.open(self.lock_file, os.O_CREAT | os.O_EXCL | os.O_RDWR)
             os.close(fd)
             return True
@@ -79,7 +77,6 @@ class ProcessingLock:
                 pass
 # endregion
 
-# Register the function globally so Jinja can use it in the HTML templates
 app.jinja_env.globals.update(format_sequence=format_sequence)
 
 # region HTML Templates (Bootstrap 5)
@@ -136,46 +133,9 @@ HTML_BOTTOM = """
             });
         });
 
-        function seekVideo(event, timeInSeconds) {
-            // Stop click event from bubbling up to the table row and toggling the plot
-            // THIS DOES NOT WORK!
-            if (event) {
-                event.stopPropagation();
-                event.preventDefault();
-            }
-
-            // Ensure assessment tables are shown
-            timeInSeconds = timeInSeconds + 0.01
-
-            var vOrig = document.getElementById('origVideo');
-            var vOver = document.getElementById('overlayVideo');
-            
-            // Sync times, reset speed, and ensure they do not auto-play
-            if(vOrig) {
-                vOrig.currentTime = timeInSeconds;
-                vOrig.playbackRate = 0.25;
-                vOrig.pause(); 
-            }
-            if(vOver) {
-                vOver.currentTime = timeInSeconds;
-                vOver.playbackRate = 0.25;
-                vOver.pause();
-            }
-            
-            // Scroll the video container smoothly into view
-            var container = document.getElementById('videoContainer');
-            // if(container) {
-            //     container.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            // }
-        }
-        
-        // Stop click event from bubbling up to the table row and toggling the plot
-        // THIS WORKS! DO NOT DELETE THIS.
-        // Listen globally for Bootstrap trying to show or hide the collapse panel
+        // Globally block collapse-toggle when nested elements are intentionally clicked
         document.addEventListener('show.bs.collapse', function (event) {
-            // Check if the element that triggered the click has 'seekVideo' in its onclick
             const trigger = event.relatedTarget || document.activeElement;
-            
             if (trigger && trigger.closest('a[onclick*="seekVideo"]')) {
                 event.preventDefault();
             }
@@ -183,7 +143,6 @@ HTML_BOTTOM = """
         
         document.addEventListener('hide.bs.collapse', function (event) {
             const trigger = event.relatedTarget || document.activeElement;
-            
             if (trigger && trigger.closest('a[onclick*="seekVideo"]')) {
                 event.preventDefault();
             }
@@ -235,11 +194,9 @@ LIST_HTML = HTML_TOP + """
                 </td>
                 <td class="text-end">
                     <a href="/analyses/{{ instance.id }}" class="btn btn-sm btn-primary">View / Process</a>
-                    
                     <form action="/analyses/{{ instance.id }}/clone" method="POST" class="d-inline">
                         <button type="submit" class="btn btn-sm btn-secondary" onclick="return confirm('Create a new analysis instance from these videos?');">Clone</button>
                     </form>
-                
                     <form action="/analyses/{{ instance.id }}/delete" method="POST" class="d-inline">
                         <button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('Delete this instance forever?');">Delete</button>
                     </form>
@@ -293,7 +250,6 @@ DETAIL_HTML = HTML_TOP + """
     </div>
 </div>
 
-<!-- Editable Note Section -->
 <div class="card shadow-sm mb-4">
     <div class="card-body py-2">
         <form action="/analyses/{{ instance_id }}/note" method="POST" class="d-flex align-items-center m-0">
@@ -305,14 +261,13 @@ DETAIL_HTML = HTML_TOP + """
 </div>
 
 <div class="row">
-    
-    <!-- Left Column: Smash Analysis Processing Panel -->
+    <!-- Smash Analysis Processing Panel -->
     <div class="col-md-6 mb-4">
         <div class="card shadow-sm h-100 border-info">
             <div class="card-body d-flex flex-column justify-content-between">
                 <div>
                     <h5 class="card-title">Smash Analysis</h5>
-                    <p class="text-muted small mb-0">Extract kinematics and identify smash timeframes.</p>
+                    <p class="text-muted small mb-0">Extract kinematics, generate local plots, and isolate individual smash video overlays.</p>
                 </div>
                 
                 {% if not has_analysis %}
@@ -321,19 +276,19 @@ DETAIL_HTML = HTML_TOP + """
                 </form>
                 {% else %}
                 <div class="mt-3 mb-0 py-2">
-                    Found <strong>{{ smashes|length }}</strong> smashes. Plots are ready to view.
+                    Found <strong>{{ smashes|length }}</strong> smashes. Extracted clips and plots are ready to view.
                 </div>
                 {% endif %}
             </div>
         </div>
     </div>
 
-    <!-- Right Column: Assessment Control Panel -->
+    <!-- Assessment Control Panel -->
     <div class="col-md-6 mb-4">
         <div class="card shadow-sm h-100 border-primary">
             <div class="card-body">
                 <h5 class="card-title">Run Injury Risk Assessment</h5>
-                <form action="/analyses/{{ instance_id }}" method="POST" class="row g-3 align-items-end" onsubmit="document.getElementById('assessBtn').disabled=true; document.getElementById('assessBtn').innerHTML='Processing...'; return true;">
+                <form action="/analyses/{{ instance_id }}/assess" method="POST" class="row g-3 align-items-end" onsubmit="document.getElementById('assessBtn').disabled=true; document.getElementById('assessBtn').innerHTML='Processing...'; return true;">
                     
                     <div class="col-md-12">
                         <label class="form-label">Max Critical Deceleration (deg/s²)</label>
@@ -360,119 +315,140 @@ DETAIL_HTML = HTML_TOP + """
             </div>
         </div>
     </div>
-
 </div>
 
 {% if has_analysis %}
-<!-- Primary Video Panel -->
-<div class="row mb-4" id="videoContainer">
-    <div class="col-12">
-        <div class="card shadow-sm h-100">
-            <div class="card-header bg-white d-flex justify-content-between align-items-center">
-                <h5 class="mb-0">Video</h5>
-                {% if has_assessment %}
-                <div class="btn-group" role="group">
-                    <input type="radio" class="btn-check" name="videoToggle" id="origVidBtn" autocomplete="off" onchange="document.getElementById('origVideo').style.display='block'; document.getElementById('overlayVideo').style.display='none';">
-                    <label class="btn btn-outline-primary btn-sm" for="origVidBtn">Original Video</label>
-
-                    <input type="radio" class="btn-check" name="videoToggle" id="overlayVidBtn" autocomplete="off" checked onchange="document.getElementById('origVideo').style.display='none'; document.getElementById('overlayVideo').style.display='block';">
-                    <label class="btn btn-outline-primary btn-sm" for="overlayVidBtn">Overlay Video</label>
-                </div>
-                {% endif %}
-            </div>
-            <div class="card-body p-0 bg-dark text-center">
-                <video id="origVideo" src="/analyses/{{ instance_id }}/{{ input_filename }}" controls class="w-100" style="{% if has_assessment %}display: none;{% endif %}"></video>
-                {% if has_assessment %}
-                <video id="overlayVideo" src="/analyses/{{ instance_id }}/analyzed.mp4" controls class="w-100" style="display: block;"></video>
-                {% endif %}
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- Smashes & Assessments Table -->
+<!-- Smashes Div Map UI -->
 <div class="row mb-4">
     <div class="col-12">
         <div class="card shadow-sm">
             <div class="card-header bg-white"><h5 class="mb-0">Smashes</h5></div>
-            <table class="table table-hover mb-0">
-                <thead class="table-light">
-                    <tr>
-                        <th>#</th>
-                        <th>Time Window</th>
-                        <th>P-D Seq / Risk</th>
-                        <th>V-Amp / Risk</th>
-                        <th>UA Decel (deg/s<sup>2</sup>) / Risk</th>
-                        <th>Overall Risk</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for s in smashes %}
-                    <!-- Row is always expandable as long as analysis is done -->
-                    <tr class="row-toggle" data-bs-toggle="collapse" data-bs-target="#plot-{{ loop.index }}" aria-expanded="false">
-                        <td class="align-middle">{{ loop.index }}</td>
-                        <td class="align-middle">
-                            <a href="#" onclick="seekVideo(event, {{ s.start_frame_idx / fps }})" class="video-seeker text-decoration-none fw-bold" title="Click to view in video">
-                                {{ s.start_time_str[:5] }} - {{ s.end_time_str[:5] }}
-                            </a>
-                        </td>
-                        
-                        {% if has_assessment %}
-                            {% set a = assessments[loop.index0] %}
-                            <td class="align-middle {% if a.p_d_sequence_risk == 0 %}text-success{% elif a.p_d_sequence_risk == 1 %}text-warning{% else %}text-danger{% endif %}">
-                                {{ format_sequence(a.p_d_sequence) }}
-                            </td>
-                            <td class="align-middle {% if a.velocity_amplification_risk == 0 %}text-success{% elif a.velocity_amplification_risk == 1 %}text-warning{% else %}text-danger{% endif %}">
-                                {{ format_sequence(a.velocity_amplification) }}
-                            </td>
-                            <td class="align-middle {% if a.critical_deceleration_risk == 0 %}text-success{% elif a.critical_deceleration_risk == 1 %}text-warning{% else %}text-danger{% endif %}">
-                                {{ a.critical_deceleration|abs|round|int }}
-                            </td>
-                            <td class="align-middle d-flex justify-content-between align-items-center">
-                                <div>
-                                    {% if a.overall_risk == 0 %}<span class="badge bg-success">Low</span>
-                                    {% elif a.overall_risk == 1 %}<span class="badge bg-warning text-dark">Mod</span>
-                                    {% else %}<span class="badge bg-danger">High</span>{% endif %}
-                                </div>
-                                <!-- Double Chevron SVG mapping to the row collapse state -->
-                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="toggle-icon text-muted ms-2" viewBox="0 0 16 16">
-                                    <path fill-rule="evenodd" d="M1.646 6.646a.5.5 0 0 1 .708 0L8 12.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708z"/>
-                                    <path fill-rule="evenodd" d="M1.646 2.646a.5.5 0 0 1 .708 0L8 8.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708z"/>
-                                </svg>
-                            </td>
-                        {% else %}
-                            <td class="align-middle text-muted">-</td>
-                            <td class="align-middle text-muted">-</td>
-                            <td class="align-middle text-muted">
-                                {{ s.critical_deceleration|abs|round|int }}
-                            </td>
-                            <td class="align-middle d-flex justify-content-between align-items-center">
-                                <span class="badge bg-secondary">Pending</span>
-                                <!-- Double Chevron SVG mapping to the row collapse state -->
-                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="toggle-icon text-muted ms-2" viewBox="0 0 16 16">
-                                    <path fill-rule="evenodd" d="M1.646 6.646a.5.5 0 0 1 .708 0L8 12.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708z"/>
-                                    <path fill-rule="evenodd" d="M1.646 2.646a.5.5 0 0 1 .708 0L8 8.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708z"/>
-                                </svg>
-                            </td>
-                        {% endif %}
-                    </tr>
+            <div class="card-body p-0">
+                <!-- Header Div Row -->
+                <div class="row m-0 bg-light border-bottom p-2 fw-bold d-none d-md-flex text-muted align-items-center">
+                    <div class="col-md-1">#</div>
+                    <div class="col-md-3">P-D Seq / Risk</div>
+                    <div class="col-md-3">V-Amp / Risk</div>
+                    <div class="col-md-3">UA Decel / Risk</div>
+                    <div class="col-md-2 text-end">Overall Risk</div>
+                </div>
+
+                {% for s in smashes %}
+                {% set a = assessments[loop.index0] if has_assessment else None %}
+                <!-- Expandable Metric Row -->
+                <div class="row m-0 border-bottom p-3 row-toggle align-items-center" data-bs-toggle="collapse" data-bs-target="#smash-details-{{ loop.index0 }}" aria-expanded="false">
+                    <div class="col-12 col-md-1 fw-bold">{{ loop.index }}</div>
                     
-                    <!-- Plot is drawn unconditionally if analysis finished -->
-                    <tr class="collapse" id="plot-{{ loop.index }}">
-                        <td colspan="6" class="p-0 bg-light text-center border-bottom">
-                            <div class="p-3">
-                                <a href="/analyses/{{ instance_id }}/kinematic_plot_{{ loop.index0 }}.png" target="_blank">
-                                    <img src="/analyses/{{ instance_id }}/kinematic_plot_{{ loop.index0 }}.png" class="img-fluid rounded shadow-sm border" style="width: 100%; object-fit: contain;">
-                                </a>
+                    {% if a %}
+                        <div class="col-12 col-md-3">
+                            <span class="{% if a.p_d_sequence_risk == 0 %}text-success{% elif a.p_d_sequence_risk == 1 %}text-warning{% else %}text-danger{% endif %}">{{ format_sequence(a.p_d_sequence) }}</span>
+                        </div>
+                        <div class="col-12 col-md-3">
+                            <span class="{% if a.velocity_amplification_risk == 0 %}text-success{% elif a.velocity_amplification_risk == 1 %}text-warning{% else %}text-danger{% endif %}">{{ format_sequence(a.velocity_amplification) }}</span>
+                        </div>
+                        <div class="col-12 col-md-3">
+                            <span class="{% if a.critical_deceleration_risk == 0 %}text-success{% elif a.critical_deceleration_risk == 1 %}text-warning{% else %}text-danger{% endif %}">{{ a.critical_deceleration|abs|round|int }} deg/s²</span>
+                        </div>
+                        <div class="col-12 col-md-2 d-flex justify-content-between align-items-center text-md-end">
+                            <div>
+                                {% if a.overall_risk == 0 %}<span class="badge bg-success">Low</span>
+                                {% elif a.overall_risk == 1 %}<span class="badge bg-warning text-dark">Mod</span>
+                                {% else %}<span class="badge bg-danger">High</span>{% endif %}
                             </div>
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="toggle-icon text-muted ms-2" viewBox="0 0 16 16">
+                                <path fill-rule="evenodd" d="M1.646 6.646a.5.5 0 0 1 .708 0L8 12.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708z"/>
+                                <path fill-rule="evenodd" d="M1.646 2.646a.5.5 0 0 1 .708 0L8 8.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708z"/>
+                            </svg>
+                        </div>
+                    {% else %}
+                        <div class="col-12 col-md-3 text-muted">-</div>
+                        <div class="col-12 col-md-3 text-muted">-</div>
+                        <div class="col-12 col-md-3 text-muted">{{ s.critical_deceleration|abs|round|int }} deg/s²</div>
+                        <div class="col-12 col-md-2 d-flex justify-content-between align-items-center text-md-end">
+                            <span class="badge bg-secondary">Pending</span>
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="toggle-icon text-muted ms-2" viewBox="0 0 16 16">
+                                <path fill-rule="evenodd" d="M1.646 6.646a.5.5 0 0 1 .708 0L8 12.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708z"/>
+                                <path fill-rule="evenodd" d="M1.646 2.646a.5.5 0 0 1 .708 0L8 8.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708z"/>
+                            </svg>
+                        </div>
+                    {% endif %}
+                </div>
+                
+                <!-- Expanded Tab Container -->
+                <div class="collapse bg-light p-3 border-bottom" id="smash-details-{{ loop.index0 }}">
+                    <ul class="nav nav-tabs" id="tabs-{{ loop.index0 }}" role="tablist">
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link active" id="plot-tab-{{ loop.index0 }}" data-bs-toggle="tab" data-bs-target="#plot-pane-{{ loop.index0 }}" type="button" role="tab">Kinematic Plot</button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link" id="video-tab-{{ loop.index0 }}" data-bs-toggle="tab" data-bs-target="#video-pane-{{ loop.index0 }}" type="button" role="tab">Overlay Video</button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link" id="orig-tab-{{ loop.index0 }}" data-bs-toggle="tab" data-bs-target="#orig-pane-{{ loop.index0 }}" type="button" role="tab">Original Video</button>
+                        </li>
+                    </ul>
+                    <div class="tab-content bg-white border border-top-0 p-3 text-center">
+                        <!-- Plot Tab -->
+                        <div class="tab-pane fade show active" id="plot-pane-{{ loop.index0 }}" role="tabpanel">
+                            <a href="/analyses/{{ instance_id }}/smash_{{ loop.index0 }}_kinematic_plot.png" target="_blank">
+                                <img src="/analyses/{{ instance_id }}/smash_{{ loop.index0 }}_kinematic_plot.png" class="img-fluid rounded shadow-sm border" style="object-fit: contain;">
+                            </a>
+                        </div>
+                        <!-- Extracted Video Overlay Tab -->
+                        <div class="tab-pane fade" id="video-pane-{{ loop.index0 }}" role="tabpanel">
+                            <video src="/analyses/{{ instance_id }}/smash_{{ loop.index0 }}_kinematic_overlay.mp4" controls class="w-100 shadow-sm border"></video>
+                        </div>
+                        <!-- Original Video Navigation Tab -->
+                        <div class="tab-pane fade" id="orig-pane-{{ loop.index0 }}" role="tabpanel">
+                            <div class="alert alert-info mt-3 shadow-sm text-center d-inline-block">
+                                <a href="#" onclick="var v = document.getElementById('raw-vid-{{ loop.index0 }}'); v.currentTime = {{ s.origin_start_frame_idx / fps }}; v.play(); return false;" class="fw-bold text-decoration-none fs-5">
+                                    {{ s.origin_start_time_str[:5] }} -- {{ s.origin_end_time_str[:5] }} in the original video
+                                </a>
+                                <p class="mb-0 mt-2 text-muted small">Click the time range above to jump directly to this smash within the raw video.</p>
+                            </div>
+                            <br>
+                            <video id="raw-vid-{{ loop.index0 }}" src="/analyses/{{ instance_id }}/{{ raw_filenames[s.origin_video_idx] }}" controls class="w-100 shadow-sm border"></video>
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+
+        {% if has_assessment %}
+        <div class="mt-4 text-start">
+            <form action="/analyses/{{ instance_id }}/video" method="POST" onsubmit="document.getElementById('joinedVidBtn').disabled=true; document.getElementById('joinedVidBtn').innerHTML='Generating...'; return true;">
+                <button type="submit" id="joinedVidBtn" class="btn btn-outline-primary fw-bold">Generate Joined Overlay Video</button>
+            </form>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+{% if has_joined_overlay %}
+<!-- Unified Video Container Display -->
+<div class="row mb-4" id="videoContainer">
+    <div class="col-12">
+        <div class="card shadow-sm h-100">
+            <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">Joined Global Videos</h5>
+                <div class="btn-group" role="group">
+                    <input type="radio" class="btn-check" name="videoToggle" id="origVidBtn" autocomplete="off" onchange="document.getElementById('origVideo').style.display='block'; document.getElementById('overlayVideo').style.display='none';">
+                    <label class="btn btn-outline-primary btn-sm" for="origVidBtn">Original Concatenated</label>
+
+                    <input type="radio" class="btn-check" name="videoToggle" id="overlayVidBtn" autocomplete="off" checked onchange="document.getElementById('origVideo').style.display='none'; document.getElementById('overlayVideo').style.display='block';">
+                    <label class="btn btn-outline-primary btn-sm" for="overlayVidBtn">Assessed Overlay</label>
+                </div>
+            </div>
+            <div class="card-body p-0 bg-dark text-center">
+                <video id="origVideo" src="/analyses/{{ instance_id }}/{{ input_filename }}" controls class="w-100" style="display: none;"></video>
+                <video id="overlayVideo" src="/analyses/{{ instance_id }}/analyzed.mp4" controls class="w-100" style="display: block;"></video>
+            </div>
         </div>
     </div>
 </div>
+{% endif %}
+
 <!-- Prevent screen jumping during mass-collapsing -->
 <div style="min-height: 100vh;"></div>
 {% endif %}
@@ -498,7 +474,6 @@ def _concatenate_videos(input_paths: list[str], output_path: str):
         while True:
             ret, frame = cap.read()
             if not ret: break
-            # Force uniform dimensions to prevent VideoWriter crash on mixed resolutions
             if frame.shape[1] != width or frame.shape[0] != height:
                 frame = cv2.resize(frame, (width, height))
             out.write(frame)
@@ -514,7 +489,7 @@ def home():
 @app.route('/analyses')
 def list_analyses():
     dirs = [d for d in glob.glob(os.path.join(ANALYSES_DIR, '*')) if os.path.isdir(d)]
-    dirs.sort(reverse=True) # Sort descending by time
+    dirs.sort(reverse=True)
 
     instances = []
     for d in dirs:
@@ -544,7 +519,7 @@ def delete_analysis(instance_id):
 @app.route('/analyses/new', methods=['GET', 'POST'])
 def new_analysis():
     if request.method == 'POST':
-        video_files = request.files.getlist('videos') # Retrieve multiple files
+        video_files = request.files.getlist('videos')
         note = request.form.get('note', '')
 
         if not video_files or video_files[0].filename == '':
@@ -599,44 +574,51 @@ def analyze_smashes(instance_id):
         frame_offset = 0
         global_fps = 120
 
-        # 1. Process each clip entirely in isolation
-        for raw_file in meta['raw_filenames']:
+        # 1. Process each raw clip iteratively
+        for vid_idx, raw_file in enumerate(meta['raw_filenames']):
             clip_path = os.path.join(instance_dir, raw_file)
             clip_metrics, fps = extract_kinematic_metrics(clip_path)
             global_fps = fps
 
-            clip_smashes = find_smashes(clip_metrics, fps)
+            clip_smashes = find_smashes(clip_metrics, fps, origin_video_idx=vid_idx)
 
-            # Translate local frame indices into the global continuous timeline
+            # Map the absolute unified 'joined' timeline indices
             for s in clip_smashes:
-                s.start_frame_idx += frame_offset
-                s.end_frame_idx += frame_offset
-                s.peak_frame_idx += frame_offset
-                s.critical_start_frame_idx += frame_offset
-                s.critical_end_frame_idx += frame_offset
-                s.overhead_start_frame_idx += frame_offset
-                s.overhead_end_frame_idx += frame_offset
-
-                # Recalculate formatted time strings based on global timeline
-                s.start_time_str = _format_timestamp(s.start_frame_idx, fps)
-                s.end_time_str = _format_timestamp(s.end_frame_idx, fps)
-                s.peak_time_str = _format_timestamp(s.peak_frame_idx, fps)
-                s.critical_start_time_str = _format_timestamp(s.critical_start_frame_idx, fps)
-                s.critical_end_time_str = _format_timestamp(s.critical_end_frame_idx, fps)
-                s.overhead_start_time_str = _format_timestamp(s.overhead_start_frame_idx, fps)
-                s.overhead_end_time_str = _format_timestamp(s.overhead_end_frame_idx, fps)
-
+                s.joined_frame_offset = frame_offset
+                s.joined_start_frame_idx = s.origin_start_frame_idx + frame_offset
+                s.joined_end_frame_idx = s.origin_end_frame_idx + frame_offset
+                s.joined_start_time_str = _format_timestamp(s.joined_start_frame_idx, fps)
+                s.joined_end_time_str = _format_timestamp(s.joined_end_frame_idx, fps)
                 all_smashes.append(s)
 
             all_metrics.extend(clip_metrics)
             frame_offset += len(clip_metrics)
 
-        # 2. Concatenate raw videos for UI playback and future overlay generation
-        joined_path = os.path.join(instance_dir, meta['input_filename'])
-        raw_paths = [os.path.join(instance_dir, f) for f in meta['raw_filenames']]
-        _concatenate_videos(raw_paths, joined_path)
+        # 2. Extract Per-Smash JSON Deliverables and direct overlays from origin (bypass concatenate)
+        for i, smash in enumerate(all_smashes):
+            start_idx = smash.joined_start_frame_idx
+            end_idx = smash.joined_end_frame_idx
 
-        # 3. Output results
+            smash_metrics = all_metrics[start_idx:end_idx]
+            save_kinematics_json(smash_metrics, os.path.join(instance_dir, f'smash_{i}_kinematics.json'))
+
+            raw_file = meta['raw_filenames'][smash.origin_video_idx]
+            raw_path = os.path.join(instance_dir, raw_file)
+            smash_overlay_path = os.path.join(instance_dir, f'smash_{i}_kinematic_overlay.mp4')
+
+            overlay_kinematic_assessment(
+                input_video_path=raw_path,
+                output_video_path=smash_overlay_path,
+                metrics=smash_metrics,
+                smashes=[smash],
+                assessments=[],
+                start_frame=smash.origin_start_frame_idx,
+                end_frame=smash.origin_end_frame_idx,
+                use_joined_timeline=False,
+                overwrite=True
+            )
+
+        # 3. Output Global Assets
         plot_smashes_kinematics(all_metrics, global_fps, all_smashes, output_dir=instance_dir)
         save_kinematics_json(all_metrics, os.path.join(instance_dir, 'kinematics.json'))
         save_json(os.path.join(instance_dir, 'smashes.json'), all_smashes)
@@ -645,7 +627,7 @@ def analyze_smashes(instance_id):
         with open(meta_path, 'w') as f:
             json.dump(meta, f)
 
-        flash("Smash analysis complete. Ready for Risk Assessment.", "success")
+        flash("Smash analysis complete. Individual clips extracted. Ready for Risk Assessment.", "success")
     except Exception as e:
         flash(f"Analysis failed: {str(e)}", "error")
     finally:
@@ -653,80 +635,118 @@ def analyze_smashes(instance_id):
 
     return redirect(url_for('detail_analysis', instance_id=instance_id))
 
-@app.route('/analyses/<instance_id>', methods=['GET', 'POST'])
+
+@app.route('/analyses/<instance_id>/assess', methods=['POST'])
+def assess_analysis(instance_id):
+    instance_dir = os.path.join(ANALYSES_DIR, instance_id)
+    if not os.path.exists(instance_dir):
+        flash("Analysis not found.", "error")
+        return redirect(url_for('list_analyses'))
+
+    smashes = load_json(os.path.join(instance_dir, 'smashes.json'), SmashEvent)
+    if smashes is None:
+        flash("Please run Smash Analysis first.", "error")
+        return redirect(url_for('detail_analysis', instance_id=instance_id))
+
+    lock = ProcessingLock(instance_dir)
+    if not lock.acquire():
+        flash("Risk Assessment is already running in another window for this instance.", "warning")
+        return redirect(url_for('detail_analysis', instance_id=instance_id))
+
+    try:
+        meta_path = os.path.join(instance_dir, 'meta.json')
+        meta = json.load(open(meta_path))
+
+        dec_option = request.form.get('dec_option', 'auto')
+        custom_dec = request.form.get('custom_dec', '')
+        meta['dec_option'] = dec_option
+        meta['custom_dec'] = custom_dec
+        with open(meta_path, 'w') as f:
+            json.dump(meta, f)
+
+        auto_max_dec = max([abs(s.critical_deceleration) for s in smashes]) if smashes else 0.0
+        if dec_option == 'custom' and custom_dec:
+            max_dec = float(custom_dec)
+        else:
+            max_dec = auto_max_dec
+
+        metrics = load_json(os.path.join(instance_dir, 'kinematics.json'), FrameMetrics)
+        assessments = assess_smashes(metrics, smashes, max_critical_deceleration=max_dec)
+        save_json(os.path.join(instance_dir, 'assessments.json'), assessments)
+
+        flash("Assessment successfully generated.", "success")
+    except Exception as e:
+        flash(f"Assessment failed: {str(e)}", "error")
+    finally:
+        lock.release()
+
+    return redirect(url_for('detail_analysis', instance_id=instance_id))
+
+
+@app.route('/analyses/<instance_id>/video', methods=['POST'])
+def generate_joined_video(instance_id):
+    instance_dir = os.path.join(ANALYSES_DIR, instance_id)
+    if not os.path.exists(instance_dir):
+        flash("Analysis not found.", "error")
+        return redirect(url_for('list_analyses'))
+
+    lock = ProcessingLock(instance_dir)
+    if not lock.acquire():
+        flash("Already processing.", "warning")
+        return redirect(url_for('detail_analysis', instance_id=instance_id))
+
+    try:
+        meta_path = os.path.join(instance_dir, 'meta.json')
+        meta = json.load(open(meta_path))
+
+        metrics = load_json(os.path.join(instance_dir, 'kinematics.json'), FrameMetrics)
+        smashes = load_json(os.path.join(instance_dir, 'smashes.json'), SmashEvent)
+        assessments = load_json(os.path.join(instance_dir, 'assessments.json'), SmashAssessment)
+
+        joined_path = os.path.join(instance_dir, meta['input_filename'])
+        if not os.path.exists(joined_path):
+            raw_paths = [os.path.join(instance_dir, f) for f in meta['raw_filenames']]
+            _concatenate_videos(raw_paths, joined_path)
+
+        vid_path = os.path.join(instance_dir, 'analyzed.mp4')
+
+        overlay_kinematic_assessment(
+            input_video_path=joined_path,
+            output_video_path=vid_path,
+            metrics=metrics,
+            smashes=smashes,
+            assessments=assessments,
+            use_joined_timeline=True,
+            overwrite=True
+        )
+
+        flash("Joined overlay video generated successfully.", "success")
+    except Exception as e:
+        flash(f"Failed to generate joined video: {str(e)}", "error")
+    finally:
+        lock.release()
+
+    return redirect(url_for('detail_analysis', instance_id=instance_id))
+
+
+@app.route('/analyses/<instance_id>', methods=['GET'])
 def detail_analysis(instance_id):
     instance_dir = os.path.join(ANALYSES_DIR, instance_id)
     if not os.path.exists(instance_dir):
         flash("Analysis not found.", "error")
         return redirect(url_for('list_analyses'))
 
-    # Load required data
     meta_path = os.path.join(instance_dir, 'meta.json')
     meta = json.load(open(meta_path))
     fps = meta.get('fps', None)
-    input_video_path = os.path.join(instance_dir, meta['input_filename'])
 
     smashes = load_json(os.path.join(instance_dir, 'smashes.json'), SmashEvent)
     has_analysis = smashes is not None
 
-    # Auto-calculate max deceleration to pre-fill UI (only if analysis is done)
     auto_max_dec = max([abs(s.critical_deceleration) for s in smashes]) if smashes else 0.0
-
-    if request.method == 'POST':
-        if not has_analysis:
-            flash("Please run Smash Analysis first.", "error")
-            return redirect(request.url)
-
-        lock = ProcessingLock(instance_dir)
-        if not lock.acquire():
-            flash("Risk Assessment is already running in another window for this instance.", "warning")
-            return redirect(request.url)
-
-        try:
-            # Save Assessment Params to restore them next time
-            dec_option = request.form.get('dec_option', 'auto')
-            custom_dec = request.form.get('custom_dec', '')
-
-            meta['dec_option'] = dec_option
-            meta['custom_dec'] = custom_dec
-            with open(meta_path, 'w') as f:
-                json.dump(meta, f)
-
-            # Phase 2: Assessment & Visualization Output Generation
-            if dec_option == 'custom' and custom_dec:
-                max_dec = float(custom_dec)
-            else:
-                max_dec = auto_max_dec
-
-            metrics = load_json(os.path.join(instance_dir, 'kinematics.json'), FrameMetrics)
-
-            # 1. Assess Risks
-            assessments = assess_smashes(metrics, smashes, max_critical_deceleration=max_dec)
-            save_json(os.path.join(instance_dir, 'assessments.json'), assessments)
-
-            # 2. Generate Overlay Video
-            vid_path = os.path.join(instance_dir, 'analyzed.mp4')
-            overlay_kinematic_assessment(
-                input_video_path=input_video_path,
-                output_video_path=vid_path,
-                metrics=metrics,
-                smashes=smashes,
-                assessments=assessments,
-                overwrite=True
-            )
-
-            flash("Assessment successfully generated.", "success")
-        except Exception as e:
-            flash(f"Assessment failed: {str(e)}", "error")
-        finally:
-            lock.release()
-
-        return redirect(request.url)
-
-    # Render GET View
     assessments = load_json(os.path.join(instance_dir, 'assessments.json'), SmashAssessment)
+    has_joined_overlay = os.path.exists(os.path.join(instance_dir, 'analyzed.mp4'))
 
-    # Read the current note
     note_path = os.path.join(instance_dir, 'note.txt')
     current_note = open(note_path).read() if os.path.exists(note_path) else ""
 
@@ -734,6 +754,7 @@ def detail_analysis(instance_id):
         DETAIL_HTML,
         instance_id=instance_id,
         note=current_note,
+        raw_filenames=meta.get('raw_filenames', []),
         input_filename=meta.get('input_filename'),
         fps=fps,
         auto_max_dec=auto_max_dec,
@@ -742,8 +763,10 @@ def detail_analysis(instance_id):
         has_analysis=has_analysis,
         smashes=smashes or [],
         has_assessment=(assessments is not None),
-        assessments=assessments or []
+        assessments=assessments or [],
+        has_joined_overlay=has_joined_overlay
     )
+
 
 @app.route('/analyses/<instance_id>/note', methods=['POST'])
 def update_note(instance_id):
@@ -766,13 +789,11 @@ def clone_analysis(instance_id):
         flash("Source analysis not found.", "error")
         return redirect(url_for('list_analyses'))
 
-    # Generate a fresh instance ID
     new_instance_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     new_dir = os.path.join(ANALYSES_DIR, new_instance_id)
     os.makedirs(new_dir)
 
     try:
-        # 1. Copy and update the note
         src_note_path = os.path.join(src_dir, 'note.txt')
         if os.path.exists(src_note_path):
             with open(src_note_path, 'r') as f:
@@ -780,7 +801,6 @@ def clone_analysis(instance_id):
             with open(os.path.join(new_dir, 'note.txt'), 'w') as f:
                 f.write(f"Copy of {note_content}")
 
-        # 2. Copy the raw videos and reset metadata
         src_meta_path = os.path.join(src_dir, 'meta.json')
         if os.path.exists(src_meta_path):
             with open(src_meta_path, 'r') as f:
@@ -793,7 +813,6 @@ def clone_analysis(instance_id):
                 if os.path.exists(src_file):
                     shutil.copy2(src_file, dest_file)
 
-            # Create a clean meta.json without the previous processing artifacts (like fps)
             new_meta = {
                 "raw_filenames": raw_files,
                 "input_filename": meta.get('input_filename', 'joined_input.mp4'),
@@ -807,23 +826,19 @@ def clone_analysis(instance_id):
         return redirect(url_for('detail_analysis', instance_id=new_instance_id))
 
     except Exception as e:
-        # Cleanup partial directories on failure
         if os.path.exists(new_dir):
             shutil.rmtree(new_dir)
         flash(f"Failed to clone instance: {str(e)}", "error")
         return redirect(url_for('list_analyses'))
 
-# Static file serving for the generated outputs
 @app.route('/analyses/<instance_id>/<filename>')
 def serve_file(instance_id, filename):
     return send_from_directory(os.path.join(ANALYSES_DIR, instance_id), filename)
 
-# Custom absolute value filter for Jinja templating
 @app.template_filter('abs')
 def absolute_value(number):
     return abs(number)
 
 if __name__ == '__main__':
-    # Use 5001 instead of 5000 to avoid conflict with macOS AirPlay Receiver service
     app.run(debug=True, port=5001)
 # endregion
