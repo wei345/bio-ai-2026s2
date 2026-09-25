@@ -830,68 +830,19 @@ def overlay_kinematic_assessment(input_video_path,
                 active_smash_idx = i
                 break
 
-        # Detailed Smash Assessment HUD
-        if active_smash_idx != -1 and active_smash_idx < len(assessments):
-            a = assessments[active_smash_idx]
+        # Determine if this is the absolute last frame being rendered
+        is_last_frame = (m_idx == len(metrics) - 1)
+        if end_frame is not None and frame_idx == end_frame - 1:
+            is_last_frame = True
 
-            # ==========================================
-            # TABLE 1 LAYOUT PARAMETERS
-            # ==========================================
-            t1_margin_right = int(15 * size_scale)
-            t1_y_from_top = height - int(260 * size_scale)
-            t1_pad_x = int(15 * size_scale)
-            t1_pad_y_top = int(30 * size_scale)
-            t1_row_h = int(30 * size_scale)
-            t1_bottom_pad = int(15 * size_scale)
-            t1_col1_w = int(90 * size_scale)
-            t1_col2_w = int(205 * size_scale)
-            t1_col3_w = int(25 * size_scale)
+        # Determine if we should show the summary table
+        show_summary = False
+        if len(smashes) >= 2 and use_joined_timeline:
+            if frame_idx > summary_start_frame or is_last_frame:
+                show_summary = True
 
-            tw = t1_pad_x + t1_col1_w + t1_col2_w + t1_col3_w + t1_pad_x
-            th = t1_pad_y_top + int(10 * size_scale) + t1_row_h + (3 * t1_row_h) + t1_bottom_pad
-            tx = width - tw - t1_margin_right
-            ty = t1_y_from_top
-
-            _draw_table_overlay(frame, tx, ty, tw, th)
-
-            # Titles & Overall Risk
-            c_overall, txt_overall = _get_risk_visuals(a.overall_risk)
-            cv2.putText(frame, f"Smash {active_smash_idx + 1}", (tx + t1_pad_x, ty + t1_pad_y_top), cv2.FONT_HERSHEY_SIMPLEX, font_title, (255, 255, 255), thick_med, cv2.LINE_AA)
-            cv2.putText(frame, f"Risk: ", (tx + tw - t1_pad_x - int(90 * size_scale), ty + t1_pad_y_top), cv2.FONT_HERSHEY_SIMPLEX, font_base, (200, 200, 200), thick_thin, cv2.LINE_AA)
-            cv2.putText(frame, f"{txt_overall}", (tx + tw - t1_pad_x - int(48 * size_scale), ty + t1_pad_y_top), cv2.FONT_HERSHEY_SIMPLEX, font_title, c_overall, thick_med, cv2.LINE_AA)
-            cv2.line(frame, (tx + t1_pad_x, ty + t1_pad_y_top + int(10 * size_scale)), (tx + tw - t1_pad_x, ty + t1_pad_y_top + int(10 * size_scale)), (255, 255, 255), thick_thin)
-
-            # Calculated Column Offsets
-            col1 = tx + t1_pad_x
-            col2 = col1 + t1_col1_w
-            col3 = col2 + t1_col2_w
-            y_base = ty + t1_pad_y_top + int(40 * size_scale)
-
-            # Headers
-            cv2.putText(frame, "Feature", (col1, y_base), cv2.FONT_HERSHEY_SIMPLEX, font_base, (200, 200, 200), thick_thin, cv2.LINE_AA)
-            cv2.putText(frame, "Result", (col2, y_base), cv2.FONT_HERSHEY_SIMPLEX, font_base, (200, 200, 200), thick_thin, cv2.LINE_AA)
-            # cv2.putText(frame, "Risk", (col3, y_base), cv2.FONT_HERSHEY_SIMPLEX, font_base, (200, 200, 200), thick_thin, cv2.LINE_AA)
-
-            # Row 1: P-D Sequence
-            c_pd, _ = _get_risk_visuals(a.p_d_sequence_risk)
-            cv2.putText(frame, "P-D Seq", (col1, y_base + t1_row_h), cv2.FONT_HERSHEY_SIMPLEX, font_base, (255, 255, 255), thick_thin, cv2.LINE_AA)
-            cv2.putText(frame, format_sequence(a.p_d_sequence), (col2, y_base + t1_row_h), cv2.FONT_HERSHEY_SIMPLEX, font_base, (255, 255, 255), thick_thin, cv2.LINE_AA)
-            cv2.putText(frame, "●", (col3, y_base + int(t1_row_h * 1.15)), cv2.FONT_HERSHEY_SIMPLEX, font_solid_circle, c_pd, thick_med, cv2.LINE_AA)
-
-            # Row 2: Velocity Amplification
-            c_amp, _ = _get_risk_visuals(a.velocity_amplification_risk)
-            cv2.putText(frame, "V-Amp", (col1, y_base + t1_row_h * 2), cv2.FONT_HERSHEY_SIMPLEX, font_base, (255, 255, 255), thick_thin, cv2.LINE_AA)
-            cv2.putText(frame, format_sequence(a.velocity_amplification), (col2, y_base + t1_row_h * 2), cv2.FONT_HERSHEY_SIMPLEX, font_base, (255, 255, 255), thick_thin, cv2.LINE_AA)
-            cv2.putText(frame, "●", (col3, y_base + int(t1_row_h * 2.15)), cv2.FONT_HERSHEY_SIMPLEX, font_solid_circle, c_amp, thick_med, cv2.LINE_AA)
-
-            # Row 3: UA Deceleration
-            c_dec, _ = _get_risk_visuals(a.critical_deceleration_risk)
-            cv2.putText(frame, "UA Decel", (col1, y_base + t1_row_h * 3), cv2.FONT_HERSHEY_SIMPLEX, font_base, (255, 255, 255), thick_thin, cv2.LINE_AA)
-            cv2.putText(frame, f"{abs(a.critical_deceleration):.0f} deg/s²", (col2, y_base + t1_row_h * 3), cv2.FONT_HERSHEY_SIMPLEX, font_base, (255, 255, 255), thick_thin, cv2.LINE_AA)
-            cv2.putText(frame, "●", (col3, y_base + int(t1_row_h * 3.15)), cv2.FONT_HERSHEY_SIMPLEX, font_solid_circle, c_dec, thick_med, cv2.LINE_AA)
-
-        # Overall Summary HUD (Only trigger for fully joined overlay)
-        elif frame_idx > summary_start_frame:
+        # Overall Summary HUD (Takes precedence on the last frame if applicable)
+        if show_summary:
             # ==========================================
             # TABLE 2 LAYOUT PARAMETERS
             # ==========================================
@@ -932,6 +883,65 @@ def overlay_kinematic_assessment(input_video_path,
                 cv2.putText(frame, str(i + 1), (col1, row_y), cv2.FONT_HERSHEY_SIMPLEX, font_base, (255, 255, 255), thick_thin, cv2.LINE_AA)
                 cv2.putText(frame, time_span, (col2, row_y), cv2.FONT_HERSHEY_SIMPLEX, font_base, (255, 255, 255), thick_thin, cv2.LINE_AA)
                 cv2.putText(frame, txt_risk, (col3, row_y), cv2.FONT_HERSHEY_SIMPLEX, font_base, c_risk, thick_med, cv2.LINE_AA)
+
+        # Detailed Smash Assessment HUD
+        elif active_smash_idx != -1 and active_smash_idx < len(assessments):
+            a = assessments[active_smash_idx]
+
+            # ==========================================
+            # TABLE 1 LAYOUT PARAMETERS
+            # ==========================================
+            t1_margin_right = int(15 * size_scale)
+            t1_y_from_top = height - int(260 * size_scale)
+            t1_pad_x = int(15 * size_scale)
+            t1_pad_y_top = int(30 * size_scale)
+            t1_row_h = int(30 * size_scale)
+            t1_bottom_pad = int(15 * size_scale)
+            t1_col1_w = int(90 * size_scale)
+            t1_col2_w = int(205 * size_scale)
+            t1_col3_w = int(25 * size_scale)
+
+            tw = t1_pad_x + t1_col1_w + t1_col2_w + t1_col3_w + t1_pad_x
+            th = t1_pad_y_top + int(10 * size_scale) + t1_row_h + (3 * t1_row_h) + t1_bottom_pad
+            tx = width - tw - t1_margin_right
+            ty = t1_y_from_top
+
+            _draw_table_overlay(frame, tx, ty, tw, th)
+
+            # Titles & Overall Risk
+            c_overall, txt_overall = _get_risk_visuals(a.overall_risk)
+            cv2.putText(frame, f"Smash {active_smash_idx + 1}", (tx + t1_pad_x, ty + t1_pad_y_top), cv2.FONT_HERSHEY_SIMPLEX, font_title, (255, 255, 255), thick_med, cv2.LINE_AA)
+            cv2.putText(frame, f"Risk: ", (tx + tw - t1_pad_x - int(90 * size_scale), ty + t1_pad_y_top), cv2.FONT_HERSHEY_SIMPLEX, font_base, (200, 200, 200), thick_thin, cv2.LINE_AA)
+            cv2.putText(frame, f"{txt_overall}", (tx + tw - t1_pad_x - int(48 * size_scale), ty + t1_pad_y_top), cv2.FONT_HERSHEY_SIMPLEX, font_title, c_overall, thick_med, cv2.LINE_AA)
+            cv2.line(frame, (tx + t1_pad_x, ty + t1_pad_y_top + int(10 * size_scale)), (tx + tw - t1_pad_x, ty + t1_pad_y_top + int(10 * size_scale)), (255, 255, 255), thick_thin)
+
+            # Calculated Column Offsets
+            col1 = tx + t1_pad_x
+            col2 = col1 + t1_col1_w
+            col3 = col2 + t1_col2_w
+            y_base = ty + t1_pad_y_top + int(40 * size_scale)
+
+            # Headers
+            cv2.putText(frame, "Feature", (col1, y_base), cv2.FONT_HERSHEY_SIMPLEX, font_base, (200, 200, 200), thick_thin, cv2.LINE_AA)
+            cv2.putText(frame, "Result", (col2, y_base), cv2.FONT_HERSHEY_SIMPLEX, font_base, (200, 200, 200), thick_thin, cv2.LINE_AA)
+
+            # Row 1: P-D Sequence
+            c_pd, _ = _get_risk_visuals(a.p_d_sequence_risk)
+            cv2.putText(frame, "P-D Seq", (col1, y_base + t1_row_h), cv2.FONT_HERSHEY_SIMPLEX, font_base, (255, 255, 255), thick_thin, cv2.LINE_AA)
+            cv2.putText(frame, format_sequence(a.p_d_sequence), (col2, y_base + t1_row_h), cv2.FONT_HERSHEY_SIMPLEX, font_base, (255, 255, 255), thick_thin, cv2.LINE_AA)
+            cv2.putText(frame, "●", (col3, y_base + int(t1_row_h * 1.15)), cv2.FONT_HERSHEY_SIMPLEX, font_solid_circle, c_pd, thick_med, cv2.LINE_AA)
+
+            # Row 2: Velocity Amplification
+            c_amp, _ = _get_risk_visuals(a.velocity_amplification_risk)
+            cv2.putText(frame, "V-Amp", (col1, y_base + t1_row_h * 2), cv2.FONT_HERSHEY_SIMPLEX, font_base, (255, 255, 255), thick_thin, cv2.LINE_AA)
+            cv2.putText(frame, format_sequence(a.velocity_amplification), (col2, y_base + t1_row_h * 2), cv2.FONT_HERSHEY_SIMPLEX, font_base, (255, 255, 255), thick_thin, cv2.LINE_AA)
+            cv2.putText(frame, "●", (col3, y_base + int(t1_row_h * 2.15)), cv2.FONT_HERSHEY_SIMPLEX, font_solid_circle, c_amp, thick_med, cv2.LINE_AA)
+
+            # Row 3: UA Deceleration
+            c_dec, _ = _get_risk_visuals(a.critical_deceleration_risk)
+            cv2.putText(frame, "UA Decel", (col1, y_base + t1_row_h * 3), cv2.FONT_HERSHEY_SIMPLEX, font_base, (255, 255, 255), thick_thin, cv2.LINE_AA)
+            cv2.putText(frame, f"{abs(a.critical_deceleration):.0f} deg/s²", (col2, y_base + t1_row_h * 3), cv2.FONT_HERSHEY_SIMPLEX, font_base, (255, 255, 255), thick_thin, cv2.LINE_AA)
+            cv2.putText(frame, "●", (col3, y_base + int(t1_row_h * 3.15)), cv2.FONT_HERSHEY_SIMPLEX, font_solid_circle, c_dec, thick_med, cv2.LINE_AA)
 
         out.write(frame)
         frame_idx += 1
