@@ -393,9 +393,7 @@ DETAIL_HTML = HTML_TOP + """
                     <div class="tab-content bg-white border border-top-0 p-3 text-center">
                         <!-- Plot Tab -->
                         <div class="tab-pane fade show active" id="plot-pane-{{ loop.index0 }}" role="tabpanel">
-                            <a href="/analyses/{{ instance_id }}/smash_{{ loop.index0 }}_kinematic_plot.png" target="_blank">
-                                <img src="/analyses/{{ instance_id }}/smash_{{ loop.index0 }}_kinematic_plot.png" class="img-fluid rounded shadow-sm border" style="object-fit: contain;">
-                            </a>
+                            <img src="/analyses/{{ instance_id }}/smash_{{ loop.index0 }}_kinematic_plot.png" class="img-fluid rounded shadow-sm border" style="object-fit: contain;">
                         </div>
                         <!-- Extracted Video Overlay Tab -->
                         <div class="tab-pane fade" id="video-pane-{{ loop.index0 }}" role="tabpanel">
