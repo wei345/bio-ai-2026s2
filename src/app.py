@@ -416,13 +416,14 @@ DETAIL_HTML = HTML_TOP + """
             </div>
         </div>
 
-        {% if has_assessment %}
         <div class="mt-4 text-start">
             <form action="/analyses/{{ instance_id }}/video" method="POST" onsubmit="document.getElementById('joinedVidBtn').disabled=true; document.getElementById('joinedVidBtn').innerHTML='Generating...'; return true;">
-                <button type="submit" id="joinedVidBtn" class="btn btn-outline-primary fw-bold">Generate Joined Overlay Video</button>
+                <button type="submit" id="joinedVidBtn" class="btn btn-outline-primary fw-bold" {% if not has_assessment %}disabled{% endif %}>Generate Joined Overlay Video</button>
             </form>
+            {% if not has_assessment %}
+            <small class="text-danger mt-2 d-block">Please run Injury Risk Assessment first.</small>
+            {% endif %}
         </div>
-        {% endif %}
     </div>
 </div>
 
@@ -596,7 +597,7 @@ def analyze_smashes(instance_id):
             all_metrics.extend(clip_metrics)
             frame_offset += len(clip_metrics)
 
-        # 2. Extract Per-Smash JSON Deliverables and direct overlays from origin (bypass concatenate)
+        # 2. Extract Per-Smash JSON Deliverables and direct overlays from origin
         for i, smash in enumerate(all_smashes):
             start_idx = smash.joined_start_frame_idx
             end_idx = smash.joined_end_frame_idx
@@ -607,12 +608,15 @@ def analyze_smashes(instance_id):
             fig_title = f"Kinematic Plot: Smash {i+1}"
             fig_name = os.path.join(instance_dir, f'smash_{i}_kinematic_plot.png')
 
-            plot_smash_kinematics(
+            x0, x1 = plot_smash_kinematics(
                 metrics=smash_metrics,
                 fps=global_fps,
                 smashes=[smash],
                 fig_title=fig_title,
                 fig_name=fig_name)
+
+            smash.plot_x0 = x0
+            smash.plot_x1 = x1
 
             raw_file = meta['raw_filenames'][smash.origin_video_idx]
             raw_path = os.path.join(instance_dir, raw_file)
@@ -627,7 +631,8 @@ def analyze_smashes(instance_id):
                 start_frame=smash.origin_start_frame_idx,
                 end_frame=smash.origin_end_frame_idx,
                 use_joined_timeline=False,
-                overwrite=True
+                overwrite=True,
+                kinematic_plot_paths=[fig_name]
             )
 
         # 3. Output Global Assets
@@ -720,6 +725,8 @@ def generate_joined_video(instance_id):
             _concatenate_videos(raw_paths, joined_path)
 
         vid_path = os.path.join(instance_dir, 'analyzed.mp4')
+        kinematic_plot_paths = [os.path.join(instance_dir, f'smash_{i}_kinematic_plot.png')
+                                for i in range(len(smashes))]
 
         overlay_kinematic_assessment(
             input_video_path=joined_path,
@@ -728,7 +735,8 @@ def generate_joined_video(instance_id):
             smashes=smashes,
             assessments=assessments,
             use_joined_timeline=True,
-            overwrite=True
+            overwrite=True,
+            kinematic_plot_paths=kinematic_plot_paths
         )
 
         flash("Joined overlay video generated successfully.", "success")

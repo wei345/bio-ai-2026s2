@@ -263,6 +263,10 @@ class SmashEvent:
 
     critical_deceleration: float
 
+    # Track the exact pixel width of the plot axes for the video overlay
+    plot_x0: int = 0
+    plot_x1: int = 0
+
 def _format_timestamp(frame_idx: int, fps: float) -> str:
     """Helper to convert frame indices to MM:SS.mmm format."""
     total_seconds = frame_idx / fps
@@ -564,9 +568,9 @@ def plot_smash_kinematics(metrics: list[FrameMetrics],
                           fps: float,
                           smashes: list[SmashEvent],
                           fig_name: str,
-                          fig_title: str = "Kinematic Plot: Smash"):
+                          fig_title: str = "Kinematic Plot: Smash") -> tuple[int, int]:
     """
-    Generates a 3-panel plot for smashes.
+    Generates a 3-panel plot for smashes and returns the X-axis pixel bounds.
     """
 
     fig_w = 8
@@ -605,6 +609,10 @@ def plot_smash_kinematics(metrics: list[FrameMetrics],
     for ax in (ax1, ax2, ax3):
         for spine in ax.spines.values():
             spine.set_linewidth(border_w)
+
+    # Force X-limits to perfectly align the start/end time with the plot borders
+    if len(times) > 1:
+        ax3.set_xlim(times[0], times[-1])
 
     fig.suptitle(fig_title, fontsize=suptitle_size)
 
@@ -702,9 +710,19 @@ def plot_smash_kinematics(metrics: list[FrameMetrics],
     ax2.legend(loc='upper left', fontsize=legend_size)
     ax3.legend(loc='upper left', fontsize=legend_size)
 
+    fig.set_dpi(300)
     plt.tight_layout()
-    plt.savefig(fig_name, dpi=300, bbox_inches='tight')
+    fig.canvas.draw()
+
+    # Calculate the exact pixel bounds of the x-axis for UI alignment
+    ax_bbox = ax3.get_window_extent()
+    x0, x1 = int(ax_bbox.x0), int(ax_bbox.x1)
+
+    # Exclude bbox_inches='tight' so pixel bounds remain 1:1 with the output file
+    plt.savefig(fig_name, dpi=300)
     plt.close(fig)
+
+    return x0, x1
 # endregion
 
 # region Visualization: Overlaying Video
@@ -792,7 +810,8 @@ def overlay_kinematic_assessment(input_video_path,
                                  overwrite=True,
                                  start_frame=0,
                                  end_frame=None,
-                                 use_joined_timeline=False):
+                                 use_joined_timeline=False,
+                                 kinematic_plot_paths: list[str] | None = None):
     """
     Renders UI elements onto video frames mapping to either a specific extracted clip (use_joined_timeline=False)
     or a fully joined global timeline (use_joined_timeline=True).
@@ -917,7 +936,7 @@ def overlay_kinematic_assessment(input_video_path,
 
         # Determine if we should show the summary table
         show_summary = False
-        if len(smashes) >= 2 and use_joined_timeline:
+        if assessments and use_joined_timeline:
             if frame_idx > summary_start_frame or is_last_frame:
                 show_summary = True
 
@@ -972,7 +991,7 @@ def overlay_kinematic_assessment(input_video_path,
             # TABLE 1 LAYOUT PARAMETERS
             # ==========================================
             t1_margin_right = int(15 * size_scale)
-            t1_y_from_top = height - int(260 * size_scale)
+            t1_margin_bottom = int(90 * size_scale)
             t1_pad_x = int(15 * size_scale)
             t1_pad_y_top = int(30 * size_scale)
             t1_row_h = int(30 * size_scale)
@@ -984,7 +1003,7 @@ def overlay_kinematic_assessment(input_video_path,
             tw = t1_pad_x + t1_col1_w + t1_col2_w + t1_col3_w + t1_pad_x
             th = t1_pad_y_top + int(10 * size_scale) + t1_row_h + (3 * t1_row_h) + t1_bottom_pad
             tx = width - tw - t1_margin_right
-            ty = t1_y_from_top
+            ty = height - th - t1_margin_bottom
 
             _draw_table_overlay(frame, tx, ty, tw, th)
 
@@ -1022,6 +1041,50 @@ def overlay_kinematic_assessment(input_video_path,
             cv2.putText(frame, "UA Decel", (col1, y_base + t1_row_h * 3), cv2.FONT_HERSHEY_SIMPLEX, font_base, (255, 255, 255), thick_thin, cv2.LINE_AA)
             cv2.putText(frame, f"{abs(a.critical_deceleration):.0f} deg/s²", (col2, y_base + t1_row_h * 3), cv2.FONT_HERSHEY_SIMPLEX, font_base, (255, 255, 255), thick_thin, cv2.LINE_AA)
             cv2.putText(frame, "●", (col3, y_base + int(t1_row_h * 3.15)), cv2.FONT_HERSHEY_SIMPLEX, font_solid_circle, c_dec, thick_med, cv2.LINE_AA)
+
+        # --- DRAW KINEMATIC PLOT OVERLAY ---
+        if active_smash_idx != -1 and kinematic_plot_paths:
+            plot_path = kinematic_plot_paths[active_smash_idx]
+            if os.path.exists(plot_path):
+                plot_img = cv2.imread(plot_path)
+                if plot_img is not None:
+                    orig_h, orig_w = plot_img.shape[:2]
+
+                    plot_margin_bottom = int(90 * size_scale)
+                    plot_pad_x = int(15 * size_scale)
+                    plot_w = int(320 * size_scale)
+                    plot_h = int(plot_w * (orig_h / float(orig_w)))
+
+                    # Position at the bottom left
+                    px = plot_pad_x
+                    py = height - plot_h - plot_margin_bottom
+
+                    if py >= 0 and px >= 0 and py + plot_h <= height and px + plot_w <= width:
+                        plot_img_resized = cv2.resize(plot_img, (plot_w, plot_h))
+
+                        # Apply to frame (Slight transparency overlay)
+                        overlay_region = frame[py:py+plot_h, px:px+plot_w]
+                        cv2.addWeighted(plot_img_resized, 0.97, overlay_region, 0.03, 0, overlay_region)
+
+                        # Draw scrolling timeline
+                        s = smashes[active_smash_idx]
+                        start_f = s.joined_start_frame_idx if use_joined_timeline else s.origin_start_frame_idx
+                        end_f = s.joined_end_frame_idx if use_joined_timeline else s.origin_end_frame_idx
+                        len_smash = end_f - start_f
+                        curr_f = frame_idx - start_f
+
+                        fraction = curr_f / float(max(1, len_smash - 1))
+                        fraction = max(0.0, min(1.0, fraction))
+
+                        x0_orig = s.plot_x0
+                        x1_orig = s.plot_x1
+
+                        if x1_orig > x0_orig:
+                            line_x_orig = x0_orig + fraction * (x1_orig - x0_orig)
+                            line_x_resized = int(line_x_orig * (plot_w / float(orig_w)))
+                            line_x_abs = px + line_x_resized
+
+                            cv2.line(frame, (line_x_abs, py), (line_x_abs, py + plot_h), (50, 50, 50), max(2, int(2 * size_scale)))
 
         out.write(frame)
         frame_idx += 1
