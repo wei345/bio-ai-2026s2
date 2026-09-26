@@ -564,10 +564,27 @@ def plot_smash_kinematics(metrics: list[FrameMetrics],
                           fps: float,
                           smashes: list[SmashEvent],
                           fig_name: str,
-                          fig_title: str="Kinematic Plot: Smash"):
+                          fig_title: str = "Kinematic Plot: Smash"):
     """
     Generates a 3-panel plot for smashes.
     """
+
+    fig_w = 8
+    figsize=(fig_w, fig_w * 10/12)
+
+    # --- Plot Font Sizes and Line Widths ---
+    font_scale = fig_w / 7
+
+    suptitle_size = 10 * font_scale
+    subplot_title_size = 9 * font_scale
+    axis_label_size = 9 * font_scale
+    tick_label_size = 8 * font_scale
+    legend_size = 8 * font_scale
+
+    line_w = 1 * font_scale
+    line_w_thick = 1.2 * font_scale
+    border_w = 0.8 * font_scale
+    grid_w = 0.6 * font_scale
 
     times = np.arange(len(metrics)) / fps
 
@@ -580,48 +597,110 @@ def plot_smash_kinematics(metrics: list[FrameMetrics],
     grip_y = [m.grip_coord[1] if m.grip_coord else np.nan for m in metrics]
     head_y = [m.head_coord[1] if m.head_coord else np.nan for m in metrics]
 
-    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 10), sharex=True)
-    fig.suptitle(fig_title, fontsize=16, fontweight='bold')
+    fig, (ax1, ax2, ax3) = plt.subplots(
+        3, 1,
+        figsize=figsize,
+        sharex=True
+    )
+    for ax in (ax1, ax2, ax3):
+        for spine in ax.spines.values():
+            spine.set_linewidth(border_w)
 
-    ax1.plot(times, trunk_v, label='Trunk', color='green', linewidth=1.5)
-    ax1.plot(times, elbow_v, label='Upper Arm', color='blue', linewidth=1.5)
-    ax1.plot(times, wrist_v, label='Forearm', color='orange', linewidth=1.5)
-    ax1.plot(times, grip_v, label='Grip', color='red', linewidth=2)
-    ax1.set_ylabel('Speed (px/s)')
-    ax1.set_title('Proximal-to-Distal Kinetic Chain & Velocity Amplification')
-    ax1.grid(True, linestyle='--', alpha=0.6)
+    fig.suptitle(fig_title, fontsize=suptitle_size)
 
-    ax2.plot(times, ang_accel, label='Upper Arm Ang Accel', color='orange', linewidth=2)
-    ax2.axhline(0, color='black', linestyle='-', linewidth=1)
-    ax2.fill_between(times, 0, ang_accel, where=(np.array(ang_accel) < 0), color='#FFE699', alpha=0.5, label='Deceleration')
-    ax2.set_ylabel('Acceleration (deg/s²)')
-    ax2.set_title('Upper Arm Angular Acceleration Profile')
-    ax2.grid(True, linestyle='--', alpha=0.6)
+    # --- Panel 1: Velocity ---
+    ax1.plot(times, trunk_v, label='Trunk', color='green', linewidth=line_w)
+    ax1.plot(times, elbow_v, label='Upper Arm', color='blue', linewidth=line_w)
+    ax1.plot(times, wrist_v, label='Forearm', color='orange', linewidth=line_w)
+    ax1.plot(times, grip_v, label='Grip', color='red', linewidth=line_w_thick)
 
-    ax3.plot(times, grip_y, label='Grip Level', color='red', linewidth=2)
-    ax3.plot(times, head_y, label='Head Level', color='blue', linestyle='--', linewidth=2)
+    ax1.set_ylabel('Speed (px/s)', fontsize=axis_label_size)
+    ax1.set_title(
+        'Proximal-to-Distal Kinetic Chain & Velocity Amplification',
+        fontsize=subplot_title_size
+    )
+    ax1.tick_params(axis='both', labelsize=tick_label_size)
+    ax1.grid(True, linestyle='--', linewidth=grid_w, alpha=0.6)
+
+    # --- Panel 2: Angular Acceleration ---
+    ax2.plot(
+        times,
+        ang_accel,
+        label='Upper Arm Ang Accel',
+        color='orange',
+        linewidth=line_w_thick
+    )
+    ax2.axhline(0, color='black', linestyle='-', linewidth=line_w)
+    ax2.fill_between(
+        times,
+        0,
+        ang_accel,
+        where=(np.array(ang_accel) < 0),
+        color='#FFE699',
+        alpha=0.5,
+        label='Deceleration'
+    )
+
+    ax2.set_ylabel('Acceleration (deg/s²)', fontsize=axis_label_size)
+    ax2.set_title(
+        'Upper Arm Angular Acceleration Profile',
+        fontsize=subplot_title_size
+    )
+    ax2.tick_params(axis='both', labelsize=tick_label_size)
+    ax2.grid(True, linestyle='--', linewidth=grid_w, alpha=0.6)
+
+    # --- Panel 3: Stroke Elevation ---
+    ax3.plot(times, grip_y, label='Grip Level', color='red', linewidth=line_w_thick)
+    ax3.plot(
+        times,
+        head_y,
+        label='Head Level',
+        color='blue',
+        linestyle='--',
+        linewidth=line_w_thick
+    )
     ax3.invert_yaxis()
-    ax3.set_ylabel('Vertical Position (px)')
-    ax3.set_xlabel('Time (seconds)')
-    ax3.set_title('Stroke Elevation (Grip vs Head)')
-    ax3.grid(True, linestyle='--', alpha=0.6)
 
-    # Plot overlays matching absolute times
+    ax3.set_ylabel('Vertical Position (px)', fontsize=axis_label_size)
+    ax3.set_xlabel('Time (seconds)', fontsize=axis_label_size)
+    ax3.set_title(
+        'Stroke Elevation (Grip vs Head)',
+        fontsize=subplot_title_size
+    )
+    ax3.tick_params(axis='both', labelsize=tick_label_size)
+    ax3.grid(True, linestyle='--', linewidth=grid_w, alpha=0.6)
+
+    # --- Smash Event Overlays ---
     offset = 0
     for smash in smashes:
         peak_t = (offset + smash.peak_frame_idx) / fps
         crit_start_t = (offset + smash.critical_start_frame_idx) / fps
         crit_end_t = (offset + smash.critical_end_frame_idx) / fps
+
         for ax in (ax1, ax2, ax3):
-            ax.axvline(x=peak_t, color='black', linestyle='--', linewidth=1.5, alpha=0.8,
-                       label='Kinematic Peak' if offset == 0 else None)
-            ax.axvspan(crit_start_t, crit_end_t, color='red', alpha=0.15, zorder=0,
-                       label="Critical Decel Phase" if offset == 0 else None)
+            ax.axvline(
+                x=peak_t,
+                color='black',
+                linestyle='--',
+                linewidth=line_w,
+                alpha=0.8,
+                label='Kinematic Peak' if offset == 0 else None
+            )
+            ax.axvspan(
+                crit_start_t,
+                crit_end_t,
+                color='red',
+                alpha=0.15,
+                zorder=0,
+                label='Critical Decel Phase' if offset == 0 else None
+            )
+
         offset += smash.end_frame_idx
 
-    ax1.legend(loc='upper left')
-    ax2.legend(loc='upper left')
-    ax3.legend(loc='upper left')
+    # --- Legends ---
+    ax1.legend(loc='upper left', fontsize=legend_size)
+    ax2.legend(loc='upper left', fontsize=legend_size)
+    ax3.legend(loc='upper left', fontsize=legend_size)
 
     plt.tight_layout()
     plt.savefig(fig_name, dpi=300, bbox_inches='tight')
