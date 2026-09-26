@@ -1050,6 +1050,7 @@ def overlay_kinematic_assessment(input_video_path,
                 if plot_img is not None:
                     orig_h, orig_w = plot_img.shape[:2]
 
+                    cursor_alpha = 0.6
                     plot_margin_bottom = int(90 * size_scale)
                     plot_pad_x = int(15 * size_scale)
                     plot_w = int(320 * size_scale)
@@ -1084,7 +1085,14 @@ def overlay_kinematic_assessment(input_video_path,
                             line_x_resized = int(line_x_orig * (plot_w / float(orig_w)))
                             line_x_abs = px + line_x_resized
 
-                            cv2.line(frame, (line_x_abs, py), (line_x_abs, py + plot_h), (50, 50, 50), max(2, int(2 * size_scale)))
+                            thickness = max(1, int(1 * size_scale))
+                            x1 = max(0, line_x_abs - thickness // 2)
+                            x2 = min(frame.shape[1], x1 + thickness)
+
+                            roi = frame[py:py + plot_h, x1:x2]
+                            line_color = np.full_like(roi, (50, 50, 50))
+
+                            cv2.addWeighted(line_color, cursor_alpha, roi, 1 - cursor_alpha, 0, roi)
 
         out.write(frame)
         frame_idx += 1
