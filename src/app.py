@@ -196,12 +196,14 @@ LIST_HTML = HTML_TOP + """
                 </td>
                 <td class="text-end">
                     <a href="/analyses/{{ instance.id }}" class="btn btn-sm btn-primary">View / Process</a>
-                    <form action="/analyses/{{ instance.id }}/clone" method="POST" class="d-inline">
-                        <button type="submit" class="btn btn-sm btn-secondary" onclick="return confirm('Create a new analysis instance from these videos?');">Clone</button>
-                    </form>
-                    <form action="/analyses/{{ instance.id }}/delete" method="POST" class="d-inline">
-                        <button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('Delete this instance forever?');">Delete</button>
-                    </form>
+                    <div class="mt-2">
+                        <form action="/analyses/{{ instance.id }}/clone" method="POST" class="d-inline">
+                            <button type="submit" class="btn btn-sm btn-secondary" onclick="return confirm('Create a new analysis instance from these videos?');">Clone</button>
+                        </form>
+                        <form action="/analyses/{{ instance.id }}/delete" method="POST" class="d-inline">
+                            <button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('Delete this instance forever?');">Delete</button>
+                        </form>
+                    </div>
                 </td>
             </tr>
             {% else %}

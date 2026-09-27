@@ -25,7 +25,11 @@ A prototype web application for extracting kinematic metrics from badminton smas
    source .venv/bin/activate
    ```
 
-4. Start the web UI:
+The activation command shown above is for macOS and Linux. Windows users
+should consult Python documentation or online resources for the appropriate
+virtual-environment activation command.
+
+4. Start the web application:
 
    ```bash
    python src/app.py
