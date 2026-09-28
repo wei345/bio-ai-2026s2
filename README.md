@@ -35,6 +35,12 @@ virtual-environment activation command.
    python src/app.py
    ```
 
+   Wait for the application to finish starting. The web application is ready when the terminal displays:
+
+   ```
+   * Running on http://127.0.0.1:5001
+   ```
+
    If the application fails to start because the port is already in use, resolve the port conflict before continuing.
 
 5. Open the web UI in a browser:
