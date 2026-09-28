@@ -262,6 +262,9 @@ class SmashEvent:
     joined_end_frame_idx: int
     joined_end_time_str: str
 
+    p_d_sequence: List[str]
+    velocity_amplification: List[str]
+    peak_angular_speed: float
     critical_deceleration: float
 
     # Track the exact pixel width of the plot axes for the video overlay
@@ -347,10 +350,10 @@ def find_smashes(kin_metrics: list[FrameMetrics],
         best_dec_start = peak_idx
         best_dec_end = min(len(kin_metrics), peak_idx + crit_dec_frames)
 
+        # Traverse backwards to maintain a running forward-looking window in O(N) time
         sliding_list = []
         sliding_sum = 0.0
 
-        # Traverse backwards to maintain a running forward-looking window in O(N) time
         for j in range(search_end - 1, peak_idx - 1, -1):
             accel = kin_metrics[j].upper_arm_angular_acceleration
 
@@ -368,8 +371,8 @@ def find_smashes(kin_metrics: list[FrameMetrics],
                     removed_accel = sliding_list.pop(0)
                     sliding_sum -= removed_accel
 
-                current_avg_dec = sliding_sum / len(sliding_list)
                 # Track the interval with the most extreme negative mean
+                current_avg_dec = sliding_sum / len(sliding_list)
                 if current_avg_dec < best_avg_dec:
                     best_avg_dec = current_avg_dec
                     best_dec_start = j
@@ -380,6 +383,32 @@ def find_smashes(kin_metrics: list[FrameMetrics],
         s_start = max(0, peak_idx - pre_frames)
         s_end = min(len(kin_metrics), peak_idx + post_frames)
         smash_length = s_end - s_start
+
+        # --- PROXIMAL-TO-DISTAL, AMPLIFICATION, & PEAK ANG SPEED ---
+        peaks = {
+            'Trunk': {'val': -1.0, 'idx': -1},
+            'Upper Arm': {'val': -1.0, 'idx': -1},
+            'Forearm': {'val': -1.0, 'idx': -1},
+            'Grip': {'val': -1.0, 'idx': -1}
+        }
+        peak_ang_speed = -1.0
+
+        for j in range(s_start, s_end):
+            m = kin_metrics[j]
+            if m.trunk_speed > peaks['Trunk']['val']:
+                peaks['Trunk'] = {'val': m.trunk_speed, 'idx': j}
+            if m.elbow_speed > peaks['Upper Arm']['val']:
+                peaks['Upper Arm'] = {'val': m.elbow_speed, 'idx': j}
+            if m.wrist_speed > peaks['Forearm']['val']:
+                peaks['Forearm'] = {'val': m.wrist_speed, 'idx': j}
+            if m.grip_speed > peaks['Grip']['val']:
+                peaks['Grip'] = {'val': m.grip_speed, 'idx': j}
+
+            if m.upper_arm_angular_speed > peak_ang_speed:
+                peak_ang_speed = m.upper_arm_angular_speed
+
+        p_d_sequence = sorted(peaks.keys(), key=lambda k: peaks[k]['idx'])
+        velocity_amplification = sorted(peaks.keys(), key=lambda k: peaks[k]['val'])
 
         smashes.append(SmashEvent(
             fps=fps,
@@ -415,6 +444,9 @@ def find_smashes(kin_metrics: list[FrameMetrics],
             joined_end_frame_idx=0,
             joined_end_time_str="",
 
+            p_d_sequence=p_d_sequence,
+            velocity_amplification=velocity_amplification,
+            peak_angular_speed=peak_ang_speed,
             critical_deceleration=avg_dec
         ))
 
@@ -472,67 +504,38 @@ def assess_smashes(kin_metrics: list[FrameMetrics],
     """
 
     assessments = []
-    # Ensure our max deceleration baseline is a positive magnitude for safe percentage math
     baseline_max_dec = abs(max_critical_deceleration)
 
     for smash in smashes:
-        # 1. Extract peak values and their frame indices within the smash window
-        peaks = {
-            'Trunk': {'val': -1.0, 'idx': -1},
-            'Upper Arm': {'val': -1.0, 'idx': -1},
-            'Forearm': {'val': -1.0, 'idx': -1},
-            'Grip': {'val': -1.0, 'idx': -1}
-        }
-        peak_ang_speed = -1.0
+        seq = smash.p_d_sequence
+        amp = smash.velocity_amplification
 
-        # Assess relies on the global 'joined' metrics timeline array passed in
-        for i in range(smash.joined_start_frame_idx, smash.joined_end_frame_idx):
-            m = kin_metrics[i]
-
-            if m.trunk_speed > peaks['Trunk']['val']:
-                peaks['Trunk'] = {'val': m.trunk_speed, 'idx': i}
-            if m.elbow_speed > peaks['Upper Arm']['val']:
-                peaks['Upper Arm'] = {'val': m.elbow_speed, 'idx': i}
-            if m.wrist_speed > peaks['Forearm']['val']:
-                peaks['Forearm'] = {'val': m.wrist_speed, 'idx': i}
-            if m.grip_speed > peaks['Grip']['val']:
-                peaks['Grip'] = {'val': m.grip_speed, 'idx': i}
-
-            if m.upper_arm_angular_speed > peak_ang_speed:
-                peak_ang_speed = m.upper_arm_angular_speed
-
-        # 2. Evaluate Proximal-to-Distal Sequence
-        # Sort segment names by the frame index they peaked at (ascending time)
-        seq_sorted = sorted(peaks.keys(), key=lambda k: peaks[k]['idx'])
-        # Check High Risk Sequence: Proximal peaks AFTER Distal
-        if (peaks['Trunk']['idx'] > peaks['Forearm']['idx'] or
-            peaks['Trunk']['idx'] > peaks['Grip']['idx'] or
-            peaks['Upper Arm']['idx'] > peaks['Forearm']['idx'] or
-            peaks['Upper Arm']['idx'] > peaks['Grip']['idx']):
+        # 1. Evaluate Proximal-to-Distal Sequence Risk using list indices
+        if (seq.index('Trunk') > seq.index('Forearm') or
+            seq.index('Trunk') > seq.index('Grip') or
+            seq.index('Upper Arm') > seq.index('Forearm') or
+            seq.index('Upper Arm') > seq.index('Grip')):
             seq_risk = RiskLevel.HIGH
-        elif seq_sorted == ['Trunk', 'Upper Arm', 'Forearm', 'Grip']:
+        elif seq == ['Trunk', 'Upper Arm', 'Forearm', 'Grip']:
             seq_risk = RiskLevel.LOW
         else:
             seq_risk = RiskLevel.MODERATE
 
-        # 3. Evaluate Velocity Amplification
-        # Sort segment names by their peak velocity magnitude (ascending speed)
-        amp_sorted = sorted(peaks.keys(), key=lambda k: peaks[k]['val'])
-        # Check High Risk Amplification: Proximal is FASTER than Distal
-        if (peaks['Trunk']['val'] > peaks['Forearm']['val'] or
-            peaks['Trunk']['val'] > peaks['Grip']['val'] or
-            peaks['Upper Arm']['val'] > peaks['Forearm']['val'] or
-            peaks['Upper Arm']['val'] > peaks['Grip']['val']):
+        # 2. Evaluate Velocity Amplification Risk using list indices
+        if (amp.index('Trunk') > amp.index('Forearm') or
+            amp.index('Trunk') > amp.index('Grip') or
+            amp.index('Upper Arm') > amp.index('Forearm') or
+            amp.index('Upper Arm') > amp.index('Grip')):
             amp_risk = RiskLevel.HIGH
-        elif amp_sorted == ['Trunk', 'Upper Arm', 'Forearm', 'Grip']:
+        elif amp == ['Trunk', 'Upper Arm', 'Forearm', 'Grip']:
             amp_risk = RiskLevel.LOW
         else:
             amp_risk = RiskLevel.MODERATE
 
-        # 4. Evaluate Critical Deceleration Risk
-        # Use absolute value to ensure negative acceleration (deceleration) scales correctly
+        # 3. Evaluate Critical Deceleration Risk
         crit_dec_mag = abs(smash.critical_deceleration)
-        # 5. Determine Overall Risk
+
+        # 4. Determine Overall Risk
         if crit_dec_mag >= (baseline_max_dec * high_risk_dec_threshold_pct):
             dec_risk = RiskLevel.HIGH
         elif crit_dec_mag < (baseline_max_dec * mod_risk_dec_threshold_pct):
@@ -548,16 +551,16 @@ def assess_smashes(kin_metrics: list[FrameMetrics],
             else:
                 overall_risk = RiskLevel.MODERATE
 
-        # 6. Construct Final Object
+        # 5. Construct Final Object
         assessments.append(SmashAssessment(
             start_time_str=smash.joined_start_time_str,
             peak_time_str=smash.joined_start_time_str,
             end_time_str=smash.joined_end_time_str,
-            p_d_sequence=seq_sorted,
+            p_d_sequence=seq,
             p_d_sequence_risk=seq_risk,
-            velocity_amplification=amp_sorted,
+            velocity_amplification=amp,
             velocity_amplification_risk=amp_risk,
-            peak_angular_speed=peak_ang_speed,
+            peak_angular_speed=smash.peak_angular_speed,
             critical_deceleration=smash.critical_deceleration,
             critical_deceleration_risk=dec_risk,
             overall_risk=overall_risk

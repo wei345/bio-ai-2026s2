@@ -367,8 +367,8 @@ DETAIL_HTML = HTML_TOP + """
                             </svg>
                         </div>
                     {% else %}
-                        <div class="col-12 col-md-3 text-muted">-</div>
-                        <div class="col-12 col-md-3 text-muted">-</div>
+                        <div class="col-12 col-md-3 text-muted">{{ format_sequence(s.p_d_sequence) }}</div>
+                        <div class="col-12 col-md-3 text-muted">{{ format_sequence(s.velocity_amplification) }}</div>
                         <div class="col-12 col-md-3 text-muted">{{ s.critical_deceleration|abs|round|int }} deg/s²</div>
                         <div class="col-12 col-md-2 d-flex justify-content-between align-items-center text-md-end">
                             <span class="badge bg-secondary">Pending</span>
