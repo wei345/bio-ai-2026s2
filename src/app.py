@@ -10,6 +10,7 @@ from flask import Flask, render_template_string, request, redirect, url_for, sen
 # Force headless mode for matplotlib before importing the analysis pipeline
 os.environ['HEADLESS_MODE'] = '1'
 
+import ffmpegcv
 import cv2
 from smash_analysis import (
     extract_kinematic_metrics, find_smashes, assess_smashes,
@@ -461,18 +462,17 @@ DETAIL_HTML = HTML_TOP + """
 
 # region Helper
 def _concatenate_videos(input_paths: list[str], output_path: str):
-    """Stitches multiple video files into a single continuous MP4."""
     if not input_paths: return
 
-    # Force uniform dimensions to prevent VideoWriter crash on mixed resolutions
+    # Force uniform dimensions to prevent crash on mixed resolutions
     cap = cv2.VideoCapture(input_paths[0])
     fps = cap.get(cv2.CAP_PROP_FPS)
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     cap.release()
 
-    fourcc = cv2.VideoWriter_fourcc(*'avc1')
-    out = cv2.VideoWriter(output_path, fourcc, int(fps), (width, height))
+    # Initialize ffmpegcv cross-platform writer
+    out = ffmpegcv.VideoWriter(output_path, codec='h264', fps=int(fps))
 
     for p in input_paths:
         cap = cv2.VideoCapture(p)

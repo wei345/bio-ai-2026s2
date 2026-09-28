@@ -10,6 +10,7 @@ os.environ['GLOG_minloglevel'] = '2'
 # Suppress the specific Protobuf deprecation warning
 warnings.filterwarnings("ignore", category=UserWarning, module="google.protobuf.symbol_database")
 
+import ffmpegcv
 import cv2
 import mediapipe as mp
 import numpy as np
@@ -832,8 +833,7 @@ def overlay_kinematic_assessment(input_video_path,
     if fps <= 0 or math.isnan(fps): fps = fallback_fps
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fourcc = cv2.VideoWriter_fourcc(*'avc1')
-    out = cv2.VideoWriter(output_video_path, fourcc, int(fps), (width, height))
+    out = ffmpegcv.VideoWriter(output_video_path, codec='h264', fps=int(fps))
 
     divisor = 1.0 if pixels_per_meter is None else pixels_per_meter
     unit_v = "px/s" if pixels_per_meter is None else "m/s"
