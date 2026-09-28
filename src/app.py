@@ -161,7 +161,7 @@ HOME_HTML = HTML_TOP + """
         <h1 class="display-5 fw-bold">Badminton Smash Assessment Tool</h1>
         <p class="col-md-8 fs-4">An automated AI pipeline using computer vision to extract 2D kinematics, detect overhead smashes, and evaluate critical shoulder injury risk factors: proximal-to-distal sequencing, velocity amplification, and upper-arm deceleration.</p>
         <a href="/analyses" class="btn btn-primary btn-lg">View Analyses</a>
-        <a href="/analyses/new" class="btn btn-outline-secondary btn-lg">Upload New Video</a>
+        <a href="/analyses/new" class="btn btn-outline-secondary btn-lg">New Analysis</a>
     </div>
 </div>
 """ + HTML_BOTTOM
