@@ -66,9 +66,7 @@ def extract_kinematic_metrics(
         outlier_window_size: int = 5,
         sg_coord_window: int = 11,
         sg_coord_poly: int = 3,
-        # Increased from 13 to solve the issue of huge different accel
-        # between macOS and Linux
-        sg_angle_window: int = 19,
+        sg_angle_window: int = 13,
         sg_angle_poly: int = 3,
         fallback_fps=120.0) -> tuple[List[FrameMetrics], float]:
 
@@ -289,7 +287,7 @@ def find_smashes(kin_metrics: list[FrameMetrics],
                  critical_deceleration_window_ms: int = 50,
                  decel_search_window_ms: int = 200,
                  min_overhead_time_ms: int = 50,
-                 decel_noise_threshold: float = 150.0) -> list[SmashEvent]:
+                 decel_noise_threshold: float = 0) -> list[SmashEvent]:
 
     smashes = []
     pre_frames = int((pre_smash_buffer_ms / 1000.0) * fps)
@@ -352,7 +350,7 @@ def find_smashes(kin_metrics: list[FrameMetrics],
         sliding_list = []
         sliding_sum = 0.0
 
-# Traverse backwards to maintain a running forward-looking window in O(N) time
+        # Traverse backwards to maintain a running forward-looking window in O(N) time
         for j in range(search_end - 1, peak_idx - 1, -1):
             accel = kin_metrics[j].upper_arm_angular_acceleration
 
