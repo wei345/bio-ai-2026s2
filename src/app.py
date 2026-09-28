@@ -10,7 +10,7 @@ from flask import Flask, render_template_string, request, redirect, url_for, sen
 # Force headless mode for matplotlib before importing the analysis pipeline
 os.environ['HEADLESS_MODE'] = '1'
 
-import ffmpegcv
+import imageio
 import cv2
 from smash_analysis import (
     extract_kinematic_metrics, find_smashes, assess_smashes,
@@ -464,15 +464,15 @@ DETAIL_HTML = HTML_TOP + """
 def _concatenate_videos(input_paths: list[str], output_path: str):
     if not input_paths: return
 
-    # Force uniform dimensions to prevent crash on mixed resolutions
     cap = cv2.VideoCapture(input_paths[0])
     fps = cap.get(cv2.CAP_PROP_FPS)
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     cap.release()
 
-    # Initialize ffmpegcv cross-platform writer
-    out = ffmpegcv.VideoWriter(output_path, codec='h264', fps=int(fps))
+    # Initialize imageio writer (bypasses Windows socket issues)
+    # macro_block_size=None prevents crashes if video dimensions aren't divisible by 16
+    out = imageio.get_writer(output_path, format='FFMPEG', fps=int(fps), codec='libx264', macro_block_size=None)
 
     for p in input_paths:
         cap = cv2.VideoCapture(p)
@@ -481,9 +481,13 @@ def _concatenate_videos(input_paths: list[str], output_path: str):
             if not ret: break
             if frame.shape[1] != width or frame.shape[0] != height:
                 frame = cv2.resize(frame, (width, height))
-            out.write(frame)
+
+            # Convert OpenCV's BGR to ImageIO's expected RGB format
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            out.append_data(frame_rgb)
+
         cap.release()
-    out.release()
+    out.close()
 # endregion
 
 # region Routes

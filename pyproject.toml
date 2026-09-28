@@ -6,7 +6,9 @@ build-backend = "setuptools.build_meta"
 name = "bio-ai-2026s2"
 version = "1.0.0"
 dependencies = [
-    "ffmpegcv==0.3.18",
+    "imageio==2.38.0",
+    "imageio-ffmpeg==0.6.0",
+    "psutil==7.2.2",
     "opencv-python==5.0.0.93",
     "mediapipe==0.10.14",
     "numpy==2.4.6",
